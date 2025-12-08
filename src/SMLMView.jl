@@ -7,6 +7,15 @@ using Statistics
 using Printf
 
 export smlmview
+export get_keybindings, set_keybinding!, reset_keybindings!, list_keys, list_actions
+
+# Include keybindings configuration
+include("keybindings.jl")
+
+# Initialize keybindings on module load
+function __init__()
+    load_keybindings!()
+end
 
 #=============================================================================
 # Constants
@@ -20,12 +29,12 @@ const DEFAULT_ZOOM_IDX = 3  # 1.0x (index into ZOOM_LEVELS)
 =============================================================================#
 
 """
-    smlmview(data::AbstractMatrix; kwargs...) -> NamedTuple
+    smlmview(data::AbstractArray; kwargs...) -> NamedTuple
 
-Launch an interactive viewer for 2D array data.
+Launch an interactive viewer for 2D or 3D array data.
 
 # Arguments
-- `data`: 2D numeric array to display
+- `data`: 2D or 3D numeric array to display
 
 # Keyword Arguments
 - `clip::Tuple{Real,Real}=(0.001, 0.999)`: Percentile clipping for intensity stretch
@@ -38,25 +47,28 @@ Launch an interactive viewer for 2D array data.
 NamedTuple with:
 - `fig`: The Makie Figure
 - `ax`: The image Axis
-- `data`: The processed display data (Float64 matrix)
+- `data`: The processed display data (Float64 array)
 - `colorrange`: Observable for intensity range
 - `cursor_pos`: Observable for cursor (row, col) position
 - `pixel_value`: Observable for value under cursor
+- `z_slice`: Observable for current z-slice (3D only)
 
 # Example
 ```julia
 using WGLMakie
 import WGLMakie.Bonito
 Bonito.configure_server!(listen_port=9384, listen_url="127.0.0.1")
-Bonito.Server(listen_url="127.0.0.1", listen_port=9384)  # Start server
 
 using SMLMView
 
-data = rand(256, 256) .* 1000
-v = smlmview(data)
+# 2D data
+data2d = rand(256, 256) .* 1000
+v = smlmview(data2d)
 
-# Programmatic control:
-v.colorrange[] = (0.0, 500.0)  # Adjust intensity range
+# 3D data
+data3d = rand(256, 256, 10) .* 1000
+v = smlmview(data3d)
+v.z_slice[] = 5  # Jump to slice 5
 ```
 
 # Keyboard Shortcuts
@@ -64,6 +76,7 @@ v.colorrange[] = (0.0, 500.0)  # Adjust intensity range
 - `o`: Zoom out (see more pixels, each smaller)
 - `r`: Reset view (fit entire image)
 - `e/s/d/f`: Pan up/left/down/right (ESDF layout)
+- `j/l`: Previous/next z-slice (3D only)
 
 # Notes
 - Data is displayed with standard image orientation: row 1 at top, col 1 at left
@@ -117,17 +130,16 @@ function smlmview(data::AbstractMatrix{T};
 
     # Image axis - clean display, no decorations (like dipshow)
     ax = Axis(fig[2, 1];
-              aspect=DataAspect(),
-              yreversed=true)
+              aspect=DataAspect())
 
     # Hide everything - just show the image
     hidedecorations!(ax)
     hidespines!(ax)
 
     # Display image as heatmap
-    # Note: heatmap expects data as (x, y) but Julia arrays are (row, col)
-    # So we transpose: display_data' maps data[row,col] to screen position (x=col, y=row)
-    heatmap!(ax, display_data';
+    # Flip rows so row 1 is at top (standard image orientation)
+    # Then transpose so cols->X, rows->Y
+    heatmap!(ax, reverse(display_data, dims=1)';
              colorrange=obs_colorrange,
              colormap=colormap,
              interpolate=false)
@@ -199,30 +211,29 @@ function smlmview(data::AbstractMatrix{T};
 
     # Keyboard event handlers (WGLMakie compatible)
     on(events(fig).keyboardbutton) do event
-        # WGLMakie KeyEvent: check key and action fields
         try
             if event.action in (Makie.Keyboard.press, Makie.Keyboard.repeat)
-                if event.key == Makie.Keyboard.r
+                key = event.key
+                if key == getkey("reset")
                     reset_view!()
-                elseif event.key == Makie.Keyboard.i
+                elseif key == getkey("zoom_in")
                     if obs_view_zoom_idx[] < length(ZOOM_LEVELS)
                         obs_view_zoom_idx[] += 1
                         update_view_limits!()
                     end
-                elseif event.key == Makie.Keyboard.o
+                elseif key == getkey("zoom_out")
                     if obs_view_zoom_idx[] > 1
                         obs_view_zoom_idx[] -= 1
                         update_view_limits!()
                     end
-                # Pan with ESDF keys
-                elseif event.key == Makie.Keyboard.e
-                    pan!(0, -1)  # up (toward row 1)
-                elseif event.key == Makie.Keyboard.d
-                    pan!(0, 1)   # down (toward higher rows)
-                elseif event.key == Makie.Keyboard.s
-                    pan!(-1, 0)  # left (toward col 1)
-                elseif event.key == Makie.Keyboard.f
-                    pan!(1, 0)   # right (toward higher cols)
+                elseif key == getkey("pan_up")
+                    pan!(0, 1)   # increase y to see top (row 1)
+                elseif key == getkey("pan_down")
+                    pan!(0, -1)  # decrease y to see bottom (row nrows)
+                elseif key == getkey("pan_left")
+                    pan!(-1, 0)
+                elseif key == getkey("pan_right")
+                    pan!(1, 0)
                 end
             end
         catch e
@@ -268,6 +279,218 @@ function smlmview(data::AbstractMatrix{T};
         pixel_value=obs_pixel_value,
         view_zoom_idx=obs_view_zoom_idx,
         view_center=obs_view_center
+    )
+end
+
+"""
+    smlmview(data::AbstractArray{T,3}; kwargs...) -> NamedTuple
+
+Launch an interactive viewer for 3D array data. See `smlmview(::AbstractMatrix)` for full docs.
+
+Additional returns for 3D:
+- `z_slice`: Observable for current z-slice index (1-based)
+- `nz`: Number of z-slices
+"""
+function smlmview(data::AbstractArray{T,3};
+                  clip::Tuple{Real,Real}=(0.001, 0.999),
+                  title::String="",
+                  colormap::Symbol=:grays,
+                  figsize::Tuple{Int,Int}=(800, 700),
+                  show::Bool=true) where T<:Number
+
+    # Process data: convert to Float64, handle complex/NaN/Inf
+    display_data = sanitize_data_3d(data)
+    nrows, ncols, nz = size(display_data)
+
+    # Compute global intensity range with percentile clipping (across all slices)
+    crange = compute_colorrange_3d(display_data, clip)
+
+    # Create observables for reactive UI
+    obs_colorrange = Observable(crange)
+    obs_cursor_pos = Observable((1, 1))
+    obs_pixel_value = Observable(display_data[1, 1, 1])
+    obs_in_bounds = Observable(false)
+    obs_z_slice = Observable(1)  # Current z-slice (1-based)
+
+    # Zoom state
+    obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
+    obs_view_center = Observable((nrows / 2.0, ncols / 2.0))
+
+    # Current slice data (reactive to z_slice changes)
+    # Flip rows so row 1 is at top, then transpose
+    obs_slice_data = @lift reverse(display_data[:, :, $(obs_z_slice)], dims=1)'
+
+    # Calculate figure size based on image aspect ratio
+    img_aspect = ncols / nrows
+    max_w, max_h = figsize
+    if img_aspect > max_w / max_h
+        fig_w = max_w
+        fig_h = round(Int, max_w / img_aspect) + 30
+    else
+        fig_h = max_h
+        fig_w = round(Int, (max_h - 30) * img_aspect)
+    end
+    actual_fig_size = (fig_w, fig_h)
+
+    # Build figure
+    fig = Figure(size=actual_fig_size)
+
+    # Image axis - clean display, no decorations
+    ax = Axis(fig[2, 1];
+              aspect=DataAspect())
+
+    hidedecorations!(ax)
+    hidespines!(ax)
+
+    # Display current slice as heatmap (reactive, already flipped)
+    heatmap!(ax, obs_slice_data;
+             colorrange=obs_colorrange,
+             colormap=colormap,
+             interpolate=false)
+
+    # Function to update view limits based on zoom and center
+    function update_view_limits!()
+        view_zoom = ZOOM_LEVELS[obs_view_zoom_idx[]]
+        center_row, center_col = obs_view_center[]
+
+        visible_cols = ncols / view_zoom
+        visible_rows = nrows / view_zoom
+
+        half_w = visible_cols / 2
+        half_h = visible_rows / 2
+
+        if visible_cols < ncols
+            center_col = clamp(center_col, 0.5 + half_w, ncols + 0.5 - half_w)
+        else
+            center_col = (ncols + 1) / 2
+        end
+
+        if visible_rows < nrows
+            center_row = clamp(center_row, 0.5 + half_h, nrows + 0.5 - half_h)
+        else
+            center_row = (nrows + 1) / 2
+        end
+
+        obs_view_center[] = (center_row, center_col)
+
+        x_lo = center_col - half_w
+        x_hi = center_col + half_w
+        y_lo = center_row - half_h
+        y_hi = center_row + half_h
+
+        limits!(ax, x_lo, x_hi, y_lo, y_hi)
+    end
+
+    function reset_view!()
+        obs_view_center[] = (nrows / 2.0, ncols / 2.0)
+        obs_view_zoom_idx[] = DEFAULT_ZOOM_IDX
+        limits!(ax, 0.5, ncols + 0.5, 0.5, nrows + 0.5)
+    end
+
+    function pan!(dcol, drow)
+        view_zoom = ZOOM_LEVELS[obs_view_zoom_idx[]]
+        visible_cols = ncols / view_zoom
+        visible_rows = nrows / view_zoom
+        jump = min(visible_cols, visible_rows) / 4
+
+        center_row, center_col = obs_view_center[]
+        new_col = center_col + dcol * jump
+        new_row = center_row + drow * jump
+
+        obs_view_center[] = (new_row, new_col)
+        update_view_limits!()
+    end
+
+    # Initial view
+    reset_view!()
+
+    # Keyboard event handlers
+    on(events(fig).keyboardbutton) do event
+        try
+            if event.action in (Makie.Keyboard.press, Makie.Keyboard.repeat)
+                key = event.key
+                if key == getkey("reset")
+                    reset_view!()
+                elseif key == getkey("zoom_in")
+                    if obs_view_zoom_idx[] < length(ZOOM_LEVELS)
+                        obs_view_zoom_idx[] += 1
+                        update_view_limits!()
+                    end
+                elseif key == getkey("zoom_out")
+                    if obs_view_zoom_idx[] > 1
+                        obs_view_zoom_idx[] -= 1
+                        update_view_limits!()
+                    end
+                elseif key == getkey("pan_up")
+                    pan!(0, 1)   # increase y to see top (row 1)
+                elseif key == getkey("pan_down")
+                    pan!(0, -1)  # decrease y to see bottom (row nrows)
+                elseif key == getkey("pan_left")
+                    pan!(-1, 0)
+                elseif key == getkey("pan_right")
+                    pan!(1, 0)
+                elseif key == getkey("slice_prev")
+                    if obs_z_slice[] > 1
+                        obs_z_slice[] -= 1
+                    end
+                elseif key == getkey("slice_next")
+                    if obs_z_slice[] < nz
+                        obs_z_slice[] += 1
+                    end
+                end
+            end
+        catch e
+            @warn "Keyboard event error" exception=e
+        end
+        return Consume(false)
+    end
+
+    # Status bar with cursor info, zoom, and slice
+    status_text = @lift begin
+        pos = $(obs_cursor_pos)
+        val = $(obs_pixel_value)
+        in_bounds = $(obs_in_bounds)
+        view_zoom = ZOOM_LEVELS[$(obs_view_zoom_idx)]
+        z = $(obs_z_slice)
+
+        pos_str = in_bounds ? "($(pos[1]), $(pos[2])) = $(format_value(val))" : "---"
+        zoom_str = format_zoom(view_zoom)
+        "$(pos_str) | z: $(z)/$(nz) | Zoom: $(zoom_str) | $(nrows)×$(ncols)×$(nz) $(T)"
+    end
+
+    Label(fig[1, :], status_text;
+          fontsize=12,
+          halign=:left,
+          tellwidth=false)
+
+    # Mouse hover tracking (use current slice for value lookup)
+    on(events(ax.scene).mouseposition) do _
+        update_cursor_3d!(ax, display_data, obs_z_slice, obs_cursor_pos, obs_pixel_value, obs_in_bounds)
+    end
+
+    # Update pixel value when z-slice changes (if cursor in bounds)
+    on(obs_z_slice) do z
+        if obs_in_bounds[]
+            row, col = obs_cursor_pos[]
+            obs_pixel_value[] = display_data[row, col, z]
+        end
+    end
+
+    if show
+        display(fig)
+    end
+
+    return (;
+        fig,
+        ax,
+        data=display_data,
+        colorrange=obs_colorrange,
+        cursor_pos=obs_cursor_pos,
+        pixel_value=obs_pixel_value,
+        view_zoom_idx=obs_view_zoom_idx,
+        view_center=obs_view_center,
+        z_slice=obs_z_slice,
+        nz=nz
     )
 end
 
@@ -340,14 +563,18 @@ end
 
 """
 Update cursor position and pixel value from mouse position.
+With flipped display: screen y=nrows is row 1 (top), screen y=1 is row nrows (bottom).
 """
 function update_cursor!(ax, data, obs_pos, obs_val, obs_in_bounds)
     try
         mpos = mouseposition(ax.scene)
         if !isnothing(mpos)
             col = round(Int, mpos[1])
-            row = round(Int, mpos[2])
+            screen_y = round(Int, mpos[2])
             nrows, ncols = size(data)
+
+            # Convert screen y to original row (flipped display)
+            row = nrows - screen_y + 1
 
             if 1 <= row <= nrows && 1 <= col <= ncols
                 obs_pos[] = (row, col)
@@ -359,6 +586,78 @@ function update_cursor!(ax, data, obs_pos, obs_val, obs_in_bounds)
         end
     catch
         # Silently handle edge cases (mouse outside scene, etc.)
+        obs_in_bounds[] = false
+    end
+    return nothing
+end
+
+#=============================================================================
+# 3D Helper functions
+=============================================================================#
+
+"""
+Convert 3D input data to Float64, handling complex numbers and non-finite values.
+"""
+function sanitize_data_3d(data::AbstractArray{<:Number,3})
+    result = Array{Float64,3}(undef, size(data))
+    for i in eachindex(data)
+        val = Float64(real(data[i]))
+        result[i] = isfinite(val) ? val : zero(Float64)
+    end
+    return result
+end
+
+"""
+Compute display colorrange based on percentile clipping for 3D data.
+"""
+function compute_colorrange_3d(data::AbstractArray{<:Number,3}, clip::Tuple{Real,Real})
+    # Filter to finite values only
+    finite_vals = filter(isfinite, vec(data))
+
+    if isempty(finite_vals)
+        return (0.0, 1.0)
+    end
+
+    # Compute range
+    lo, hi = if clip == (0.0, 1.0)
+        extrema(finite_vals)
+    else
+        quantile(finite_vals, (clip[1], clip[2]))
+    end
+
+    # Ensure valid range (lo < hi)
+    if lo >= hi
+        hi = lo + oneunit(lo)
+    end
+
+    return (Float64(lo), Float64(hi))
+end
+
+"""
+Update cursor position and pixel value from mouse position for 3D data.
+With flipped display: screen y=nrows is row 1 (top), screen y=1 is row nrows (bottom).
+"""
+function update_cursor_3d!(ax, data, obs_z_slice, obs_pos, obs_val, obs_in_bounds)
+    try
+        mpos = mouseposition(ax.scene)
+        if !isnothing(mpos)
+            col = round(Int, mpos[1])
+            screen_y = round(Int, mpos[2])
+            z = obs_z_slice[]
+            nrows, ncols, _ = size(data)
+
+            # Convert screen y to original row (flipped display)
+            row = nrows - screen_y + 1
+
+            if 1 <= row <= nrows && 1 <= col <= ncols
+                obs_pos[] = (row, col)
+                obs_val[] = data[row, col, z]
+                obs_in_bounds[] = true
+            else
+                obs_in_bounds[] = false
+            end
+        end
+    catch
         obs_in_bounds[] = false
     end
     return nothing
