@@ -34,6 +34,7 @@ NamedTuple with:
 - `1`-`9` + `1`-`9`: Two-number sequence sets display_dims (e.g., `21` for transpose)
 - `c`: Cycle colormap (grays, inferno, viridis, turbo, plasma, twilight)
 - `m`: Cycle mapping (linear, log, p1_99, p5_95)
+- `g`: Cycle stretch mode (global, slice)
 - `r`: Reset view (fit entire image)
 - `i`/`o`: Zoom in/out
 - `e`/`s`/`d`/`f`: Pan up/left/down/right
@@ -110,6 +111,10 @@ function smlmview(data::AbstractArray{T,N};
     obs_mapping_idx = Observable(1)  # Default to linear
     obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
 
+    # Stretch mode state (global vs per-slice scaling)
+    obs_stretch_idx = Observable(1)  # Default to global
+    obs_stretch = @lift STRETCH_MODES[$(obs_stretch_idx)]
+
     # Zoom state
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
     obs_view_center = Observable((0.0, 0.0))  # Will be set by reset_view!
@@ -136,14 +141,23 @@ function smlmview(data::AbstractArray{T,N};
         end
     end
 
-    # Update colorrange based on current mapping
+    # Update colorrange based on current mapping and stretch mode
     function update_colorrange!()
         mapping = obs_mapping[]
-        crange = compute_colorrange_sampled(data, mapping.clip)
+        stretch = obs_stretch[]
+
+        # Get source data for colorrange: global dataset or current slice
+        if stretch == :global
+            source_data = data
+        else  # :slice
+            source_data = prepare_slice_nd(data, obs_display_dims[], slice_indices)
+        end
+
+        crange = compute_colorrange_sampled(source_data, mapping.clip)
         if mapping.transform == :log
             # Transform the range for log display
             lo, hi = crange
-            min_data = minimum(data)
+            min_data = minimum(source_data)
             lo_shifted = lo - min_data + 1.0
             hi_shifted = hi - min_data + 1.0
             crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
@@ -177,6 +191,10 @@ function smlmview(data::AbstractArray{T,N};
     for idx_obs in slice_indices
         on(idx_obs) do _
             update_slice!()
+            # Update colorrange when in slice mode
+            if obs_stretch[] == :slice
+                update_colorrange!()
+            end
         end
     end
 
@@ -184,6 +202,11 @@ function smlmview(data::AbstractArray{T,N};
     on(obs_mapping_idx) do _
         update_colorrange!()
         update_slice!()
+    end
+
+    # When stretch mode changes, update colorrange
+    on(obs_stretch_idx) do _
+        update_colorrange!()
     end
 
     # Get current display dimensions' sizes
@@ -378,6 +401,9 @@ function smlmview(data::AbstractArray{T,N};
                 elseif key == getkey("mapping_cycle")
                     # Cycle mapping (intensity transform + clip)
                     obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
+                elseif key == getkey("stretch_cycle")
+                    # Cycle stretch mode (global vs per-slice)
+                    obs_stretch_idx[] = mod1(obs_stretch_idx[] + 1, length(STRETCH_MODES))
                 end
             end
         catch e
@@ -397,6 +423,7 @@ function smlmview(data::AbstractArray{T,N};
         slider_dims = $(obs_slider_to_dim)
         cmap = $(obs_colormap)
         mapping = $(obs_mapping)
+        stretch = $(obs_stretch)
 
         pos_str = in_bounds ? "($(pos[1]), $(pos[2])) = $(format_value(val))" : "---"
         zoom_str = format_zoom(view_zoom)
@@ -418,7 +445,7 @@ function smlmview(data::AbstractArray{T,N};
         # Size string
         size_str = join(data_size, "×")
 
-        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(mapping.name) | $(size_str) $(T)"
+        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(mapping.name) | $(stretch) | $(size_str) $(T)"
     end
 
     Label(fig[1, :], status_text;
@@ -516,6 +543,8 @@ function smlmview(data::AbstractArray{T,N};
         colormap_idx=obs_colormap_idx,
         mapping=obs_mapping,
         mapping_idx=obs_mapping_idx,
+        stretch=obs_stretch,
+        stretch_idx=obs_stretch_idx,
         cursor_pos=obs_cursor_pos,
         pixel_value=obs_pixel_value,
         view_zoom_idx=obs_view_zoom_idx,

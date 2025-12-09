@@ -19,3 +19,7 @@ const MAPPINGS = (
     (name=:p1_99,   clip=(0.01, 0.99),   transform=:linear),
     (name=:p5_95,   clip=(0.05, 0.95),   transform=:linear),
 )
+
+# Stretch modes for cycling with 'g' key
+# :global = colorrange from entire dataset, :slice = colorrange from current slice
+const STRETCH_MODES = (:global, :slice)
