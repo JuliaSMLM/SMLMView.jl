@@ -4,58 +4,63 @@
 using Pkg
 Pkg.activate(dirname(@__DIR__))
 
-using WGLMakie
-import WGLMakie.Bonito
-
-# Configure Bonito BEFORE creating any figures
-# Port 8080 is in VSCode's WebSocket-supported port list
-port = 8080
-Bonito.configure_server!(listen_port=port, listen_url="127.0.0.1")
-println("Bonito configured on port $port")
-
 using SMLMView
+# Note: SMLMView auto-configures Bonito on first smlmview() call
 
-# Create a 64×128×256 3D test volume (64 rows, 128 cols, 10 z-slices)
-# Each slice has distinct features for easy verification
-function make_test_volume()
-    nrows, ncols, nz = 64, 128, 10
+# Create a 128×256×100 3D test volume for performance testing
+# Each slice has distinct features - spots move across z
+function make_test_volume(; nrows=128, ncols=256, nz=100)
+    println("Generating $(nrows)×$(ncols)×$(nz) test volume...")
     vol = zeros(Float64, nrows, ncols, nz)
 
     # Base gradient: each slice has different intensity
     for z in 1:nz
-        vol[:, :, z] .= 100.0 * z  # slice 1 is dimmer, slice 10 is brighter
+        vol[:, :, z] .= 50.0 + 5.0 * z  # gradual increase
     end
 
-    # Mark (1,1) corner in all slices - top-left should be visible
+    # Mark top-left corner with bright "L" shape (rows 1-10, cols 1-10)
     for z in 1:nz
-        vol[1, 1, z] += 500.0
+        # Vertical bar of L (column 1, rows 1-10)
+        for r in 1:10
+            vol[r, 1, z] = 3000.0
+            vol[r, 2, z] = 3000.0
+        end
+        # Horizontal bar of L (row 10, cols 1-10)
+        for c in 1:10
+            vol[10, c, z] = 3000.0
+            vol[9, c, z] = 3000.0
+        end
+        # Extra bright corner at (1,1)
+        vol[1, 1, z] = 5000.0
+        vol[1, 2, z] = 5000.0
+        vol[2, 1, z] = 5000.0
     end
 
-    # Add z-dependent spots: spot moves across slices
+    # Add z-dependent moving spot (traces diagonal path)
     for z in 1:nz
-        # Spot position varies with z
-        r0 = 20 + z * 3
-        c0 = 30 + z * 8
-        sigma = 2.0
-        amplitude = 1000.0
+        # Spot position varies with z (wraps around)
+        r0 = mod1(50 + z * 2, nrows - 20)
+        c0 = mod1(50 + z * 2, ncols - 20)
+        sigma = 3.0
+        amplitude = 2000.0
 
-        for r in max(1, r0-10):min(nrows, r0+10)
-            for c in max(1, c0-10):min(ncols, c0+10)
+        for r in max(1, r0-15):min(nrows, r0+15)
+            for c in max(1, c0-15):min(ncols, c0+15)
                 d2 = (r - r0)^2 + (c - c0)^2
                 vol[r, c, z] += amplitude * exp(-d2 / (2 * sigma^2))
             end
         end
     end
 
-    # Add some static spots that appear in all slices
-    for _ in 1:10
-        r0, c0 = rand(10:nrows-10), rand(10:ncols-10)
-        sigma = 1.5
-        amplitude = 500.0
+    # Add static random spots (visible in all frames)
+    for _ in 1:50
+        r0, c0 = rand(15:nrows-15), rand(15:ncols-15)
+        sigma = 2.0
+        amplitude = 800.0
 
         for z in 1:nz
-            for r in max(1, r0-8):min(nrows, r0+8)
-                for c in max(1, c0-8):min(ncols, c0+8)
+            for r in max(1, r0-10):min(nrows, r0+10)
+                for c in max(1, c0-10):min(ncols, c0+10)
                     d2 = (r - r0)^2 + (c - c0)^2
                     vol[r, c, z] += amplitude * exp(-d2 / (2 * sigma^2))
                 end
@@ -63,6 +68,7 @@ function make_test_volume()
         end
     end
 
+    println("Volume generated: $(Base.summarysize(vol) ÷ 1024^2) MB")
     return vol
 end
 
@@ -71,13 +77,18 @@ nrows, ncols, nz = size(data)
 println("Created $(size(data)) test volume ($(nrows) rows × $(ncols) cols × $(nz) slices)")
 println("Pixel (1,1,1) = $(data[1,1,1]) - should be visible at TOP-LEFT")
 
-v = smlmview(data; title="3D Test Volume", colormap=:inferno)
+println("\nLaunching viewer...")
+v = smlmview(data; title="Performance Test: $(nz) frames", colormap=:inferno)
 
-println("\nViewer launched - check VSCode plot pane")
-println("Verify: TOP-LEFT should have bright corner (pixel 1,1)")
-println("Verify: Image is WIDE (128 cols) and SHORT (64 rows)")
+println("\nViewer launched - test slice navigation speed!")
+println("Hold 'l' to rapidly advance through slices")
+println("Hold 'j' to go backwards")
+println("\nOrientation check:")
+println("  - Bright 'L' shape should be at TOP-LEFT")
+println("  - Image should be WIDE (256 cols) and SHORT (128 rows)")
 println("\nKeyboard shortcuts:")
-println("  j/l: Previous/Next z-slice")
+println("  j/l: Previous/Next z-slice (hold for rapid navigation)")
 println("  i/o: Zoom in/out")
 println("  e/s/d/f: Pan up/left/down/right")
 println("  r: Reset view")
+println("\nNote: 128×256×100 = ~25 MB Float64 data")

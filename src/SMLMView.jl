@@ -8,9 +8,47 @@ using Printf
 
 export smlmview
 export get_keybindings, set_keybinding!, reset_keybindings!, list_keys, list_actions
+export configure_display!
 
 # Include keybindings configuration
 include("keybindings.jl")
+
+# Track if we've configured Bonito
+const _bonito_configured = Ref(false)
+
+# Default port for Bonito server (VSCode WebSocket-compatible)
+const DEFAULT_PORT = 8080
+
+"""
+    configure_display!(; port=8080)
+
+Configure Bonito server for WGLMakie display. Call once per Julia session.
+Automatically called on first `smlmview()` if not already configured.
+
+For VSCode Remote, this sets up the external_url for proper WebSocket tunneling.
+"""
+function configure_display!(; port::Int=DEFAULT_PORT)
+    if _bonito_configured[]
+        @info "Bonito already configured, skipping"
+        return nothing
+    end
+
+    Bonito.configure_server!(
+        listen_port=port,
+        listen_url="127.0.0.1",
+        external_url="http://localhost:$(port)"
+    )
+    _bonito_configured[] = true
+    @info "SMLMView display configured on port $port"
+    return nothing
+end
+
+# Ensure Bonito is configured before display
+function ensure_display_configured!()
+    if !_bonito_configured[]
+        configure_display!()
+    end
+end
 
 # Initialize keybindings on module load
 function __init__()
@@ -90,8 +128,8 @@ function smlmview(data::AbstractMatrix{T};
                   colormap::Symbol=:grays,
                   figsize::Tuple{Int,Int}=(800, 700),
                   show::Bool=true) where T<:Number
-    # Note: Bonito server must be configured BEFORE calling this function
-    # Use: Bonito.configure_server!(listen_port=9384, listen_url="127.0.0.1")
+    # Auto-configure Bonito if not already done
+    ensure_display_configured!()
 
     # Process data: convert to Float64, handle complex/NaN/Inf
     display_data = sanitize_data(data)
@@ -266,10 +304,15 @@ function smlmview(data::AbstractMatrix{T};
 
     # Display the figure if requested
     if show
-        display(fig)
+        try
+            display(fig)
+        catch e
+            @warn "display(fig) failed, returning figure for manual display" exception=e
+        end
     end
 
     # Return handle for programmatic control
+    # Note: In REPL, evaluate v.fig to display if show=false or display failed
     return (;
         fig,
         ax,
@@ -297,6 +340,8 @@ function smlmview(data::AbstractArray{T,3};
                   colormap::Symbol=:grays,
                   figsize::Tuple{Int,Int}=(800, 700),
                   show::Bool=true) where T<:Number
+    # Auto-configure Bonito if not already done
+    ensure_display_configured!()
 
     # Process data: convert to Float64, handle complex/NaN/Inf
     display_data = sanitize_data_3d(data)
@@ -477,7 +522,11 @@ function smlmview(data::AbstractArray{T,3};
     end
 
     if show
-        display(fig)
+        try
+            display(fig)
+        catch e
+            @warn "display(fig) failed, returning figure for manual display" exception=e
+        end
     end
 
     return (;

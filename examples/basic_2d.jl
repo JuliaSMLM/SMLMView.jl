@@ -4,16 +4,8 @@
 using Pkg
 Pkg.activate(dirname(@__DIR__))
 
-using WGLMakie
-import WGLMakie.Bonito
-
-# Configure Bonito BEFORE creating any figures
-# Port 8080 is in VSCode's WebSocket-supported port list
-port = 8080
-Bonito.configure_server!(listen_port=port, listen_url="127.0.0.1")
-println("Bonito configured on port $port")
-
 using SMLMView
+# Note: SMLMView auto-configures Bonito on first smlmview() call
 
 # Create a 128×256 rectangular test image (128 rows, 256 columns)
 # Display should be: width=256 (columns), height=128 (rows)

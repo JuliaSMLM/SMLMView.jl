@@ -26,8 +26,10 @@ See `PRD.md` for complete product requirements. Key points:
 - `e/s/d/f`: Pan up/left/down/right (jump = 1/4 of min visible dimension)
 - Mouse hover: Shows pixel value continuously
 
+### Key Shortcuts (Implemented - 3D)
+- `j/l`: Previous/next z-slice
+
 ### Key Shortcuts (Future)
-- `n/p`: Next/prev slice (3D+)
 - `f/b`: Forward/back frame (4D)
 - `c`: Cycle mapping (linear/log/sqrt)
 - `s`: Cycle stretch (global/frame/none)
@@ -56,19 +58,21 @@ WGLMakie, Observables, Statistics
 GLMakie, SMLMData, Images
 ```
 
-### WGLMakie Setup Pattern
+### WGLMakie Setup (Auto-Configured)
+SMLMView automatically configures Bonito on first `smlmview()` call:
 ```julia
-using WGLMakie
-import WGLMakie.Bonito
-
-# MUST configure BEFORE creating figures
-# Use port 8080 - VSCode only forwards WebSocket on specific ports
-Bonito.configure_server!(listen_port=8080, listen_url="127.0.0.1")
-
-fig = Figure()
-# ... build UI ...
-display(fig)
+using SMLMView
+smlmview(rand(256, 256))  # Just works!
 ```
+
+For manual control or custom port:
+```julia
+using SMLMView
+configure_display!(port=8080)  # Optional: call before smlmview()
+```
+
+**Critical for VSCode Remote**: The `external_url` parameter is set automatically to enable
+WebSocket tunneling through VSCode's port forwarding.
 
 ### VSCode Remote WebSocket Ports
 VSCode Dev Tunnels/Remote only forward WebSocket on specific ports:
@@ -77,16 +81,16 @@ VSCode Dev Tunnels/Remote only forward WebSocket on specific ports:
 5500, 5555, 6006, 7777, 7860, 8000, 8050, 8080, 8081,
 8089, 8888, 9291
 ```
-**Use port 8080** (or another from this list) for VSCode plot pane to work.
+Default port 8080 is used. Check VSCode's Ports panel if display issues occur.
 
 ## Implementation Notes
 
 ### Image Orientation (MATLAB/DIPimage Convention)
 - **Top-left = (1,1)**: Row 1 at top, column 1 at left
-- **Axis settings**: `yreversed=true` on Axis
-- **Data mapping**: `heatmap!(ax, data')` - transpose so cols→X, rows→Y
+- **Data mapping**: `heatmap!(ax, reverse(data, dims=1)')` - flip rows then transpose
 - **Interpolation**: `interpolate=false` for nearest neighbor (crisp pixels)
-- **Coordinates**: Mouse position (X,Y) maps to (col, row), display as `(row, col) = value`
+- **Coordinates**: Mouse Y maps to `row = nrows - screen_y + 1`, display as `(row, col) = value`
+- **Note**: `yreversed=true` doesn't work reliably in WGLMakie, so we flip data instead
 
 ### Phase 1 (MVP) - COMPLETE
 1. WGLMakie figure with Bonito config (port 8080)
@@ -120,13 +124,22 @@ using Pkg
 Pkg.activate(".")
 Pkg.instantiate()
 
-# Test with WGLMakie
-using WGLMakie
-import WGLMakie.Bonito
-Bonito.configure_server!(listen_port=8080, listen_url="127.0.0.1")
 using SMLMView
 
-# Quick test
+# Quick test - Bonito auto-configured on first call
 data = rand(256, 256)
 smlmview(data)
+
+# 3D test
+data3d = rand(64, 128, 10)
+v = smlmview(data3d)  # Use j/l to navigate z-slices
+```
+
+### Keybindings API
+```julia
+get_keybindings()           # Show current bindings
+set_keybinding!(:zoom_in, "k")  # Change zoom_in to 'k'
+reset_keybindings!()        # Reset to defaults
+list_keys()                 # Valid key names
+list_actions()              # Configurable actions
 ```
