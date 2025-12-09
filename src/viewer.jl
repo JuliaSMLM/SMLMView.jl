@@ -31,9 +31,8 @@ NamedTuple with:
 - `pixel_value`: Observable for value under cursor
 
 # Keyboard Shortcuts
-- `1`-`9` + `1`-`9`: Two-number sequence sets display_dims (within 500ms)
-- `v`: Cycle through all dim pair combinations
-- `t`: Transpose (swap row/col dims)
+- `1`-`9` + `1`-`9`: Two-number sequence sets display_dims (e.g., `21` for transpose)
+- `c`: Cycle colormap (grays, inferno, viridis, turbo, plasma, twilight)
 - `r`: Reset view (fit entire image)
 - `i`/`o`: Zoom in/out
 - `e`/`s`/`d`/`f`: Pan up/left/down/right
@@ -100,6 +99,11 @@ function smlmview(data::AbstractArray{T,N};
     # Pending dim key for two-number sequence
     pending_dim_key = Observable{Union{Nothing,Int}}(nothing)
     pending_dim_time = Ref(0.0)
+
+    # Colormap state - find initial index or default to first
+    initial_cmap_idx = findfirst(==(colormap), COLORMAPS)
+    obs_colormap_idx = Observable(initial_cmap_idx === nothing ? 1 : initial_cmap_idx)
+    obs_colormap = @lift COLORMAPS[$(obs_colormap_idx)]
 
     # Zoom state
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
@@ -185,7 +189,7 @@ function smlmview(data::AbstractArray{T,N};
     function create_heatmap!()
         hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_slice_data;
                            colorrange=obs_colorrange,
-                           colormap=colormap,
+                           colormap=obs_colormap,
                            interpolate=false)
     end
 
@@ -246,21 +250,6 @@ function smlmview(data::AbstractArray{T,N};
         obs_view_center[] = (new_row, new_col)
         update_view_limits!()
     end
-
-    # Generate all valid dim pairs for cycling
-    function get_dim_pairs()
-        pairs = Tuple{Int,Int}[]
-        for i in 1:N
-            for j in 1:N
-                if i != j
-                    push!(pairs, (i, j))
-                end
-            end
-        end
-        return pairs
-    end
-
-    dim_pairs = get_dim_pairs()
 
     # Function to change display dims
     function set_display_dims!(new_dims::Tuple{Int,Int})
@@ -343,20 +332,9 @@ function smlmview(data::AbstractArray{T,N};
                             slice_indices[dim][] += 1
                         end
                     end
-                elseif key == Makie.Keyboard.v
-                    # Cycle through dim pairs
-                    current = obs_display_dims[]
-                    idx = findfirst(==(current), dim_pairs)
-                    if idx === nothing
-                        set_display_dims!(dim_pairs[1])
-                    else
-                        next_idx = mod1(idx + 1, length(dim_pairs))
-                        set_display_dims!(dim_pairs[next_idx])
-                    end
-                elseif key == Makie.Keyboard.t
-                    # Transpose (swap dims)
-                    current = obs_display_dims[]
-                    set_display_dims!((current[2], current[1]))
+                elseif key == getkey("colormap_cycle")
+                    # Cycle colormap
+                    obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(COLORMAPS))
                 end
             end
         catch e
@@ -374,6 +352,7 @@ function smlmview(data::AbstractArray{T,N};
         dd = $(obs_display_dims)
         pending = $(pending_dim_key)
         slider_dims = $(obs_slider_to_dim)
+        cmap = $(obs_colormap)
 
         pos_str = in_bounds ? "($(pos[1]), $(pos[2])) = $(format_value(val))" : "---"
         zoom_str = format_zoom(view_zoom)
@@ -395,7 +374,7 @@ function smlmview(data::AbstractArray{T,N};
         # Size string
         size_str = join(data_size, "×")
 
-        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(size_str) $(T)"
+        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(size_str) $(T)"
     end
 
     Label(fig[1, :], status_text;
@@ -489,6 +468,8 @@ function smlmview(data::AbstractArray{T,N};
         display_dims=obs_display_dims,
         slice_indices=slice_indices,
         colorrange=obs_colorrange,
+        colormap=obs_colormap,
+        colormap_idx=obs_colormap_idx,
         cursor_pos=obs_cursor_pos,
         pixel_value=obs_pixel_value,
         view_zoom_idx=obs_view_zoom_idx,

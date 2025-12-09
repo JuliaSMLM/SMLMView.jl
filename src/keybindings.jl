@@ -9,15 +9,16 @@ const Keyboard = WGLMakie.Makie.Keyboard
 
 # Default keybindings (action => key string)
 const DEFAULT_KEYBINDINGS = Dict{String,String}(
-    "zoom_in"     => "i",
-    "zoom_out"    => "o",
-    "reset"       => "r",
-    "pan_up"      => "e",
-    "pan_down"    => "d",
-    "pan_left"    => "s",
-    "pan_right"   => "f",
-    "slice_prev"  => "j",
-    "slice_next"  => "l",
+    "zoom_in"       => "i",
+    "zoom_out"      => "o",
+    "reset"         => "r",
+    "pan_up"        => "e",
+    "pan_down"      => "d",
+    "pan_left"      => "s",
+    "pan_right"     => "f",
+    "slice_prev"    => "j",
+    "slice_next"    => "l",
+    "colormap_cycle"=> "c",
 )
 
 # Runtime keybindings storage (action => Keyboard.Button)
