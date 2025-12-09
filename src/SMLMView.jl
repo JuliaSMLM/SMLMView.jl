@@ -36,7 +36,7 @@ function configure_display!(; port::Int=DEFAULT_PORT)
     Bonito.configure_server!(
         listen_port=port,
         listen_url="127.0.0.1",
-        external_url="http://localhost:$(port)"
+        proxy_url="http://localhost:$(port)"
     )
     _bonito_configured[] = true
     @info "SMLMView display configured on port $port"
@@ -343,17 +343,16 @@ function smlmview(data::AbstractArray{T,3};
     # Auto-configure Bonito if not already done
     ensure_display_configured!()
 
-    # Process data: convert to Float64, handle complex/NaN/Inf
-    display_data = sanitize_data_3d(data)
-    nrows, ncols, nz = size(display_data)
+    # Keep reference to original data - no copy!
+    nrows, ncols, nz = size(data)
 
-    # Compute global intensity range with percentile clipping (across all slices)
-    crange = compute_colorrange_3d(display_data, clip)
+    # Compute global intensity range by sampling (no full copy)
+    crange = compute_colorrange_sampled(data, clip)
 
     # Create observables for reactive UI
     obs_colorrange = Observable(crange)
     obs_cursor_pos = Observable((1, 1))
-    obs_pixel_value = Observable(display_data[1, 1, 1])
+    obs_pixel_value = Observable(Float64(real(data[1, 1, 1])))
     obs_in_bounds = Observable(false)
     obs_z_slice = Observable(1)  # Current z-slice (1-based)
 
@@ -361,19 +360,21 @@ function smlmview(data::AbstractArray{T,3};
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
     obs_view_center = Observable((nrows / 2.0, ncols / 2.0))
 
-    # Current slice data (reactive to z_slice changes)
+    # Current slice data - process one frame at a time (creates small temp array)
     # Flip rows so row 1 is at top, then transpose
-    obs_slice_data = @lift reverse(display_data[:, :, $(obs_z_slice)], dims=1)'
+    obs_slice_data = @lift prepare_slice(data, $(obs_z_slice))
 
     # Calculate figure size based on image aspect ratio
+    # Extra height for status bar (30) + z-slider (30)
     img_aspect = ncols / nrows
     max_w, max_h = figsize
+    ui_height = 60  # status bar + slider
     if img_aspect > max_w / max_h
         fig_w = max_w
-        fig_h = round(Int, max_w / img_aspect) + 30
+        fig_h = round(Int, max_w / img_aspect) + ui_height
     else
         fig_h = max_h
-        fig_w = round(Int, (max_h - 30) * img_aspect)
+        fig_w = round(Int, (max_h - ui_height) * img_aspect)
     end
     actual_fig_size = (fig_w, fig_h)
 
@@ -508,16 +509,33 @@ function smlmview(data::AbstractArray{T,3};
           halign=:left,
           tellwidth=false)
 
-    # Mouse hover tracking (use current slice for value lookup)
+    # Z-slice slider (bidirectional sync with keyboard)
+    sl = Makie.Slider(fig[3, :], range=1:nz, startvalue=obs_z_slice[])
+
+    # Slider → obs_z_slice (only update if different to avoid loops)
+    on(sl.value) do v
+        if v != obs_z_slice[]
+            obs_z_slice[] = v
+        end
+    end
+
+    # obs_z_slice → slider (keyboard changes update slider)
+    on(obs_z_slice) do z
+        if z != sl.value[]
+            sl.value[] = z
+        end
+    end
+
+    # Mouse hover tracking (use original data for value lookup)
     on(events(ax.scene).mouseposition) do _
-        update_cursor_3d!(ax, display_data, obs_z_slice, obs_cursor_pos, obs_pixel_value, obs_in_bounds)
+        update_cursor_3d!(ax, data, obs_z_slice, obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
 
     # Update pixel value when z-slice changes (if cursor in bounds)
     on(obs_z_slice) do z
         if obs_in_bounds[]
             row, col = obs_cursor_pos[]
-            obs_pixel_value[] = display_data[row, col, z]
+            obs_pixel_value[] = Float64(real(data[row, col, z]))
         end
     end
 
@@ -529,10 +547,11 @@ function smlmview(data::AbstractArray{T,3};
         end
     end
 
+    # Return reference to original data (no copy)
     return (;
         fig,
         ax,
-        data=display_data,
+        data=data,
         colorrange=obs_colorrange,
         cursor_pos=obs_cursor_pos,
         pixel_value=obs_pixel_value,
@@ -700,7 +719,7 @@ function update_cursor_3d!(ax, data, obs_z_slice, obs_pos, obs_val, obs_in_bound
 
             if 1 <= row <= nrows && 1 <= col <= ncols
                 obs_pos[] = (row, col)
-                obs_val[] = data[row, col, z]
+                obs_val[] = Float64(real(data[row, col, z]))
                 obs_in_bounds[] = true
             else
                 obs_in_bounds[] = false
@@ -710,6 +729,69 @@ function update_cursor_3d!(ax, data, obs_z_slice, obs_pos, obs_val, obs_in_bound
         obs_in_bounds[] = false
     end
     return nothing
+end
+
+"""
+Prepare a single slice for display (minimal allocation).
+Flip rows so row 1 is at top, then transpose for heatmap.
+"""
+function prepare_slice(data::AbstractArray{T,3}, z::Int) where T
+    slice = @view data[:, :, z]
+    # Flip and transpose - creates one small temp array per frame
+    return collect(reverse(slice, dims=1)')
+end
+
+"""
+Compute colorrange by sampling frames (no full copy).
+Samples a subset of frames to estimate percentiles.
+"""
+function compute_colorrange_sampled(data::AbstractArray{<:Number,3}, clip::Tuple{Real,Real};
+                                     max_samples::Int=1_000_000)
+    nrows, ncols, nz = size(data)
+    npixels = nrows * ncols * nz
+
+    if npixels <= max_samples
+        # Small enough to scan all
+        lo, hi = typemax(Float64), typemin(Float64)
+        for val in data
+            v = Float64(real(val))
+            if isfinite(v)
+                lo = min(lo, v)
+                hi = max(hi, v)
+            end
+        end
+    else
+        # Sample uniformly
+        step = max(1, npixels ÷ max_samples)
+        samples = Float64[]
+        sizehint!(samples, max_samples)
+
+        idx = 1
+        for k in 1:nz, j in 1:ncols, i in 1:nrows
+            if idx % step == 0
+                v = Float64(real(data[i, j, k]))
+                isfinite(v) && push!(samples, v)
+            end
+            idx += 1
+        end
+
+        if isempty(samples)
+            return (0.0, 1.0)
+        end
+
+        if clip == (0.0, 1.0)
+            lo, hi = extrema(samples)
+        else
+            lo, hi = quantile(samples, (clip[1], clip[2]))
+        end
+    end
+
+    # Ensure valid range
+    if lo >= hi
+        hi = lo + oneunit(lo)
+    end
+
+    return (Float64(lo), Float64(hi))
 end
 
 end # module

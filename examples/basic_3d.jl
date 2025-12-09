@@ -2,7 +2,7 @@
 # Run this in VSCode with the play button
 
 using Pkg
-Pkg.activate(dirname(@__DIR__))
+Pkg.activate(@__DIR__)
 
 using SMLMView
 # Note: SMLMView auto-configures Bonito on first smlmview() call

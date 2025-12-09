@@ -34,12 +34,22 @@ See `PRD.md` for complete product requirements. Key points:
 - `c`: Cycle mapping (linear/log/sqrt)
 - `s`: Cycle stretch (global/frame/none)
 
-### UI Layout
+### UI Layout (Current - 3D)
+```
+┌─ Status: (row, col) = value │ z: 5/100 │ Zoom: 1x │ 128×256×100 Float64 ──┐
+│                                                                            │
+│                            Image Display                                   │
+│                                                                            │
+├─ Z Slider: [═══════════════●═════════════════════════════════════════════]─┤
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### UI Layout (Future)
 ```
 ┌─ Dropdowns: [Stretch ▾] [Mapping ▾] [Clip ▾] ─────────────────────┐
 │                        Image Display                              │
 ├─ Sliders: Z: [═══●═══] T: [═══●═══] ─────────────────────────────┤
-│ Status: (x,y) = value │ Zoom: 2x │ 512×512 Float32               │
+│ Status: (row, col) = value │ Zoom: 2x │ 512×512 Float32          │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,7 +81,7 @@ using SMLMView
 configure_display!(port=8080)  # Optional: call before smlmview()
 ```
 
-**Critical for VSCode Remote**: The `external_url` parameter is set automatically to enable
+**Critical for VSCode Remote**: The `proxy_url` parameter is set automatically to enable
 WebSocket tunneling through VSCode's port forwarding.
 
 ### VSCode Remote WebSocket Ports
@@ -104,6 +114,8 @@ Default port 8080 is used. Check VSCode's Ports panel if display issues occur.
 9. Reset view (`r`) to fit entire image
 10. Auto-sized figure based on image aspect ratio
 11. Basic status bar with coordinates and zoom
+12. 3D support with z-slice navigation (j/l keys)
+13. Z-slider with bidirectional sync (slider ↔ keyboard)
 
 ### Performance Priorities
 - Only render current 2D slice (lazy for ND)
