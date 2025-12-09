@@ -33,6 +33,7 @@ NamedTuple with:
 # Keyboard Shortcuts
 - `1`-`9` + `1`-`9`: Two-number sequence sets display_dims (e.g., `21` for transpose)
 - `c`: Cycle colormap (grays, inferno, viridis, turbo, plasma, twilight)
+- `m`: Cycle mapping (linear, log, p1_99, p5_95)
 - `r`: Reset view (fit entire image)
 - `i`/`o`: Zoom in/out
 - `e`/`s`/`d`/`f`: Pan up/left/down/right
@@ -105,6 +106,10 @@ function smlmview(data::AbstractArray{T,N};
     obs_colormap_idx = Observable(initial_cmap_idx === nothing ? 1 : initial_cmap_idx)
     obs_colormap = @lift COLORMAPS[$(obs_colormap_idx)]
 
+    # Mapping state (intensity transform + clip)
+    obs_mapping_idx = Observable(1)  # Default to linear
+    obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
+
     # Zoom state
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
     obs_view_center = Observable((0.0, 0.0))  # Will be set by reset_view!
@@ -119,15 +124,44 @@ function smlmview(data::AbstractArray{T,N};
     obs_xs = Observable(1:initial_ncols)
     obs_ys = Observable(1:initial_nrows)
 
+    # Apply intensity transform to slice data
+    function apply_transform(slice::AbstractMatrix, transform::Symbol)
+        if transform == :log
+            # Log transform: shift to positive, take log10
+            min_val = minimum(slice)
+            shifted = slice .- min_val .+ 1.0  # Ensure all positive
+            return log10.(shifted)
+        else
+            return slice
+        end
+    end
+
+    # Update colorrange based on current mapping
+    function update_colorrange!()
+        mapping = obs_mapping[]
+        crange = compute_colorrange_sampled(data, mapping.clip)
+        if mapping.transform == :log
+            # Transform the range for log display
+            lo, hi = crange
+            min_data = minimum(data)
+            lo_shifted = lo - min_data + 1.0
+            hi_shifted = hi - min_data + 1.0
+            crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
+        end
+        obs_colorrange[] = crange
+    end
+
     # Update slice AND coordinates when display_dims or any slice_index changes
     function update_slice!()
         dd = obs_display_dims[]
+        mapping = obs_mapping[]
         # Update coordinate ranges FIRST to avoid size mismatch during render
         # (If data updates before coords, Makie tiles/stretches to fit old coords)
         obs_xs[] = 1:data_size[dd[2]]  # ncols
         obs_ys[] = 1:data_size[dd[1]]  # nrows
-        # Then update data
-        obs_slice_data[] = prepare_slice_nd(data, dd, slice_indices)
+        # Get raw slice, apply transform
+        raw_slice = prepare_slice_nd(data, dd, slice_indices)
+        obs_slice_data[] = apply_transform(raw_slice, mapping.transform)
     end
 
     on(obs_display_dims) do _
@@ -144,6 +178,12 @@ function smlmview(data::AbstractArray{T,N};
         on(idx_obs) do _
             update_slice!()
         end
+    end
+
+    # When mapping changes, update colorrange and slice
+    on(obs_mapping_idx) do _
+        update_colorrange!()
+        update_slice!()
     end
 
     # Get current display dimensions' sizes
@@ -335,6 +375,9 @@ function smlmview(data::AbstractArray{T,N};
                 elseif key == getkey("colormap_cycle")
                     # Cycle colormap
                     obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(COLORMAPS))
+                elseif key == getkey("mapping_cycle")
+                    # Cycle mapping (intensity transform + clip)
+                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
                 end
             end
         catch e
@@ -353,6 +396,7 @@ function smlmview(data::AbstractArray{T,N};
         pending = $(pending_dim_key)
         slider_dims = $(obs_slider_to_dim)
         cmap = $(obs_colormap)
+        mapping = $(obs_mapping)
 
         pos_str = in_bounds ? "($(pos[1]), $(pos[2])) = $(format_value(val))" : "---"
         zoom_str = format_zoom(view_zoom)
@@ -374,7 +418,7 @@ function smlmview(data::AbstractArray{T,N};
         # Size string
         size_str = join(data_size, "×")
 
-        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(size_str) $(T)"
+        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(mapping.name) | $(size_str) $(T)"
     end
 
     Label(fig[1, :], status_text;
@@ -470,6 +514,8 @@ function smlmview(data::AbstractArray{T,N};
         colorrange=obs_colorrange,
         colormap=obs_colormap,
         colormap_idx=obs_colormap_idx,
+        mapping=obs_mapping,
+        mapping_idx=obs_mapping_idx,
         cursor_pos=obs_cursor_pos,
         pixel_value=obs_pixel_value,
         view_zoom_idx=obs_view_zoom_idx,

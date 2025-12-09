@@ -19,6 +19,7 @@ const DEFAULT_KEYBINDINGS = Dict{String,String}(
     "slice_prev"    => "j",
     "slice_next"    => "l",
     "colormap_cycle"=> "c",
+    "mapping_cycle" => "m",
 )
 
 # Runtime keybindings storage (action => Keyboard.Button)
