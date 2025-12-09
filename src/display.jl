@@ -8,7 +8,7 @@ const _bonito_configured = Ref(false)
 """
     configure_display!(; port=8080)
 
-Configure Bonito server for WGLMakie display. Call once per Julia session.
+Configure WGLMakie and Bonito server for display. Call once per Julia session.
 Automatically called on first `smlmview()` if not already configured.
 
 For VSCode Remote, this sets up the proxy_url for proper WebSocket tunneling.
@@ -18,6 +18,9 @@ function configure_display!(; port::Int=DEFAULT_PORT)
         @info "Bonito already configured, skipping"
         return nothing
     end
+
+    # Ensure WGLMakie is the active backend
+    WGLMakie.activate!()
 
     Bonito.configure_server!(
         listen_port=port,
