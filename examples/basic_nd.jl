@@ -23,12 +23,9 @@ function make_test_4d()
         data[y, x, z, t] = 100.0 + y + x/2 + z*10 + t*50
     end
 
-    # Mark corners of the YX plane (dims 1,2)
-    for t in 1:5, z in 1:10
-        data[1, 1, z, t] = 5000.0      # Top-left
-        data[1, 128, z, t] = 3000.0    # Top-right
-        data[64, 1, z, t] = 2000.0     # Bottom-left
-    end
+    # Mark ONLY top-left corner (1,1,1,1) for orientation check
+    # This single bright pixel verifies (1,1,...) appears at screen top-left
+    data[1, 1, 1, 1] = 10000.0
 
     # Add a spot that moves with Z (visible in YZ or XZ views)
     for t in 1:5, z in 1:10

@@ -22,23 +22,9 @@ function make_test_volume(; nrows=128, ncols=256, nz=100)
         vol[:, :, z] .= 50.0 + 5.0 * z  # gradual increase
     end
 
-    # Mark top-left corner with bright "L" shape (rows 1-10, cols 1-10)
-    for z in 1:nz
-        # Vertical bar of L (column 1, rows 1-10)
-        for r in 1:10
-            vol[r, 1, z] = 3000.0
-            vol[r, 2, z] = 3000.0
-        end
-        # Horizontal bar of L (row 10, cols 1-10)
-        for c in 1:10
-            vol[10, c, z] = 3000.0
-            vol[9, c, z] = 3000.0
-        end
-        # Extra bright corner at (1,1)
-        vol[1, 1, z] = 5000.0
-        vol[1, 2, z] = 5000.0
-        vol[2, 1, z] = 5000.0
-    end
+    # Mark ONLY top-left corner (1,1,1) for orientation check
+    # This single bright pixel verifies (1,1,...) appears at screen top-left
+    vol[1, 1, 1] = 10000.0
 
     # Add z-dependent moving spot (traces diagonal path)
     for z in 1:nz
@@ -88,7 +74,7 @@ println("\nViewer launched - test slice navigation speed!")
 println("Hold 'l' to rapidly advance through slices")
 println("Hold 'j' to go backwards")
 println("\nOrientation check:")
-println("  - Bright 'L' shape should be at TOP-LEFT")
+println("  - Single bright pixel at (1,1,1) should be at TOP-LEFT (only visible on slice 1)")
 println("  - Image should be WIDE (256 cols) and SHORT (128 rows)")
 println("\nKeyboard shortcuts:")
 println("  j/l: Previous/Next z-slice (hold for rapid navigation)")
