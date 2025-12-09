@@ -1,5 +1,9 @@
 # Basic ND viewer example
-# Tests 4D and 5D data with display dimension switching
+# Tests 4D data with display dimension switching
+#
+# Run this in VSCode with the Julia extension's play button
+# The figure will appear in the plot pane
+# (Running from command line won't show the figure)
 
 using Pkg
 Pkg.activate(@__DIR__)

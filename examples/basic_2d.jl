@@ -1,5 +1,8 @@
 # Basic 2D viewer example
-# Run this in VSCode with the play button
+#
+# Run this in VSCode with the Julia extension's play button
+# The figure will appear in the plot pane
+# (Running from command line won't show the figure)
 
 using Pkg
 Pkg.activate(@__DIR__)
