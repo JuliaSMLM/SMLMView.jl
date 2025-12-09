@@ -128,6 +128,9 @@ function smlmview(data::AbstractArray{T,N};
 
     on(obs_display_dims) do _
         update_slice!()
+        # Resize figure to match new aspect ratio
+        new_size = calculate_figure_size()
+        resize!(fig, new_size...)
         # Recreate heatmap to force WGLMakie texture reallocation with new dimensions
         empty!(ax)
         create_heatmap!()
@@ -147,19 +150,25 @@ function smlmview(data::AbstractArray{T,N};
         return (nrows, ncols)
     end
 
-    # Calculate figure size based on initial image aspect ratio
-    nrows, ncols = get_display_sizes()
-    img_aspect = ncols / nrows
-    max_w, max_h = figsize
-    ui_height = 30 + 25 * max(0, n_sliders)  # status bar + sliders
-    if img_aspect > max_w / max_h
-        fig_w = max_w
-        fig_h = round(Int, max_w / img_aspect) + ui_height
-    else
-        fig_h = max_h
-        fig_w = round(Int, (max_h - ui_height) * img_aspect)
+    # UI height for status bar + sliders
+    ui_height = 30 + 25 * max(0, n_sliders)
+
+    # Calculate figure size based on image aspect ratio
+    function calculate_figure_size()
+        nrows, ncols = get_display_sizes()
+        img_aspect = ncols / nrows
+        max_w, max_h = figsize
+        if img_aspect > max_w / max_h
+            fig_w = max_w
+            fig_h = round(Int, max_w / img_aspect) + ui_height
+        else
+            fig_h = max_h
+            fig_w = round(Int, (max_h - ui_height) * img_aspect)
+        end
+        return (fig_w, fig_h)
     end
-    actual_fig_size = (fig_w, fig_h)
+
+    actual_fig_size = calculate_figure_size()
 
     # Build figure
     fig = Figure(size=actual_fig_size)
