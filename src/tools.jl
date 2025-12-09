@@ -83,7 +83,9 @@ function prepare_slice_nd(data::AbstractArray{T,N},
     end
 
     # Flip rows so row 1 is at top, then transpose for heatmap (cols→X, rows→Y)
-    return collect(reverse(slice_2d, dims=1)')
+    # Use permutedims instead of ' to avoid Adjoint wrapper issues with SubArrays
+    flipped = reverse(slice_2d, dims=1)
+    return collect(permutedims(flipped, (2, 1)))
 end
 
 """

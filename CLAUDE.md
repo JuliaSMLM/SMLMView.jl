@@ -93,7 +93,23 @@ VSCode Dev Tunnels/Remote only forward WebSocket on specific ports:
 ```
 Default port 8080 is used. Check VSCode's Ports panel if display issues occur.
 
+### Troubleshooting: Figure Not Appearing
+If the viewer doesn't display after calling `smlmview()`:
+1. Open VSCode's **Ports** panel (View → Ports)
+2. Find port 8080 in the list
+3. **Remove** the port forwarding (right-click → Stop Forwarding)
+4. **Re-add** port 8080 (click "Forward a Port", enter 8080)
+5. Try `smlmview()` again
+
+This often fixes stale WebSocket connections after Julia restarts.
+
 ## Implementation Notes
+
+### WGLMakie Texture Limitation
+- **Heatmap texture dimensions are fixed at creation**: When coordinate observables change length (e.g., xs from 1:128 to 1:64), WGLMakie doesn't reallocate the texture
+- **Symptom**: Interleaved/garbled display when switching `display_dims` to differently-shaped view
+- **Solution**: Recreate heatmap with `empty!(ax)` + `heatmap!(...)` when `display_dims` changes
+- **Slice navigation is fine**: Same texture shape, only values change
 
 ### Image Orientation (MATLAB/DIPimage Convention)
 - **Top-left = (1,1)**: Row 1 at top, column 1 at left

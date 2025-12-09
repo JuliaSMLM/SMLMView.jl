@@ -108,13 +108,29 @@ function smlmview(data::AbstractArray{T,N};
     # Current slice data - reactive to display_dims and slice_indices
     obs_slice_data = Observable(prepare_slice_nd(data, display_dims, slice_indices))
 
-    # Update slice when display_dims or any slice_index changes
+    # Coordinate observables - must update when display_dims changes
+    # These ensure heatmap coordinate grid matches data shape
+    initial_nrows = data_size[display_dims[1]]
+    initial_ncols = data_size[display_dims[2]]
+    obs_xs = Observable(1:initial_ncols)
+    obs_ys = Observable(1:initial_nrows)
+
+    # Update slice AND coordinates when display_dims or any slice_index changes
     function update_slice!()
-        obs_slice_data[] = prepare_slice_nd(data, obs_display_dims[], slice_indices)
+        dd = obs_display_dims[]
+        # Update coordinate ranges FIRST to avoid size mismatch during render
+        # (If data updates before coords, Makie tiles/stretches to fit old coords)
+        obs_xs[] = 1:data_size[dd[2]]  # ncols
+        obs_ys[] = 1:data_size[dd[1]]  # nrows
+        # Then update data
+        obs_slice_data[] = prepare_slice_nd(data, dd, slice_indices)
     end
 
     on(obs_display_dims) do _
         update_slice!()
+        # Recreate heatmap to force WGLMakie texture reallocation with new dimensions
+        empty!(ax)
+        create_heatmap!()
     end
 
     for idx_obs in slice_indices
@@ -153,11 +169,18 @@ function smlmview(data::AbstractArray{T,N};
     hidedecorations!(ax)
     hidespines!(ax)
 
-    # Display current slice as heatmap
-    heatmap!(ax, obs_slice_data;
-             colorrange=obs_colorrange,
-             colormap=colormap,
-             interpolate=false)
+    # Display current slice as heatmap with explicit coordinates
+    # Store reference for recreation when display_dims changes (WGLMakie texture resize issue)
+    hm_ref = Ref{Any}(nothing)
+
+    function create_heatmap!()
+        hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_slice_data;
+                           colorrange=obs_colorrange,
+                           colormap=colormap,
+                           interpolate=false)
+    end
+
+    create_heatmap!()
 
     # Function to update view limits based on zoom and center
     function update_view_limits!()
