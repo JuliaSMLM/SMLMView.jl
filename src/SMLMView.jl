@@ -522,7 +522,7 @@ function smlmview(data::AbstractArray{T,3};
     # obs_z_slice → slider (keyboard changes update slider)
     on(obs_z_slice) do z
         if z != sl.value[]
-            sl.value[] = z
+            set_close_to!(sl, z)
         end
     end
 

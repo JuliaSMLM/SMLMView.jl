@@ -4,6 +4,7 @@
 using Pkg
 Pkg.activate(@__DIR__)
 
+using Revise
 using SMLMView
 # Note: SMLMView auto-configures Bonito on first smlmview() call
 
