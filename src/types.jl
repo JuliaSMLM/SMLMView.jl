@@ -23,3 +23,22 @@ const MAPPINGS = (
 # Stretch modes for cycling with 'g' key
 # :global = colorrange from entire dataset, :slice = colorrange from current slice
 const STRETCH_MODES = (:global, :slice)
+
+# RGB type from Makie/ColorTypes (re-exported by WGLMakie)
+const RGB = WGLMakie.Makie.RGB
+const Colorant = WGLMakie.Makie.Colorant
+
+# Default channel colors for multi-channel composite (CMY)
+# CMY additive blending: C+M=Blue, C+Y=Green, M+Y=Red, C+M+Y=White
+const DEFAULT_CHANNEL_COLORS = (
+    RGB{Float64}(0.0, 1.0, 1.0),  # Cyan
+    RGB{Float64}(1.0, 0.0, 1.0),  # Magenta
+    RGB{Float64}(1.0, 1.0, 0.0),  # Yellow
+)
+
+# Named color presets for channels
+const CHANNEL_COLOR_PRESETS = Dict{Symbol, NTuple{3, RGB{Float64}}}(
+    :cmy => (RGB{Float64}(0.0, 1.0, 1.0), RGB{Float64}(1.0, 0.0, 1.0), RGB{Float64}(1.0, 1.0, 0.0)),
+    :rgb => (RGB{Float64}(1.0, 0.0, 0.0), RGB{Float64}(0.0, 1.0, 0.0), RGB{Float64}(0.0, 0.0, 1.0)),
+    :mgc => (RGB{Float64}(1.0, 0.0, 1.0), RGB{Float64}(0.0, 1.0, 0.0), RGB{Float64}(0.0, 1.0, 1.0)),
+)
