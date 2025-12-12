@@ -11,13 +11,13 @@ const DEFAULT_PORT = 8080  # Default port for Bonito server (VSCode WebSocket-co
 const COLORMAPS = (:grays, :inferno, :viridis, :turbo, :plasma, :twilight)
 
 # Intensity mapping modes for cycling with 'm' key
-# Each is (name, clip_lo, clip_hi, transform)
-# transform: :linear or :log
+# Each is (name, clip, transform)
+# clip=(0.0, 1.0) means full min-max range (no percentile clipping)
 const MAPPINGS = (
-    (name=:linear,  clip=(0.001, 0.999), transform=:linear),
-    (name=:log,     clip=(0.001, 0.999), transform=:log),
-    (name=:p1_99,   clip=(0.01, 0.99),   transform=:linear),
-    (name=:p5_95,   clip=(0.05, 0.95),   transform=:linear),
+    (name=:linear,  clip=(0.0, 1.0),   transform=:linear),  # Full min-max range
+    (name=:log,     clip=(0.0, 1.0),   transform=:log),     # Log with full range
+    (name=:p1_99,   clip=(0.01, 0.99), transform=:linear),  # 1%-99% percentile
+    (name=:p5_95,   clip=(0.05, 0.95), transform=:linear),  # 5%-95% percentile
 )
 
 # Stretch modes for cycling with 'g' key

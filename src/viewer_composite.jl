@@ -14,7 +14,7 @@ Launch an interactive viewer for multi-channel composite display.
 - `colors`: Channel colors, default CMY (cyan, magenta, yellow)
 - `names`: Channel names for display
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims are (rows, cols)
-- `clip::Tuple{Real,Real}=(0.001, 0.999)`: Percentile clipping
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping (0.0, 1.0 = full range)
 - `figsize::Tuple{Int,Int}=(800, 700)`: Max figure size
 - `show::Bool=true`: Whether to display immediately
 
@@ -38,7 +38,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
                   colors::Union{Nothing, NTuple{C, RGB{Float64}}}=nothing,
                   names::Union{Nothing, NTuple{C, String}}=nothing,
                   display_dims::Tuple{Int,Int}=(1, 2),
-                  clip::Tuple{Real,Real}=(0.001, 0.999),
+                  clip::Tuple{Real,Real}=(0.0, 1.0),
                   title::String="",
                   figsize::Tuple{Int,Int}=(800, 700),
                   show::Bool=true) where {T<:Real, N, C}

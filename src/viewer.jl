@@ -13,7 +13,7 @@ Launch an interactive viewer for N-dimensional array data (N ≥ 2).
 # Keyword Arguments
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims to display (row_dim, col_dim)
 - `dim_names::Union{Nothing,NTuple{N,String}}=nothing`: Optional labels for each dimension
-- `clip::Tuple{Real,Real}=(0.001, 0.999)`: Percentile clipping for intensity stretch
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping for intensity stretch (0.0, 1.0 = full range)
 - `title::String=""`: Window/axis title
 - `colormap::Symbol=:grays`: Colormap for display
 - `figsize::Tuple{Int,Int}=(800, 700)`: Maximum figure size in pixels
@@ -63,7 +63,7 @@ v = smlmview(data4d; display_dims=(1, 3), dim_names=("Y", "X", "Z", "T"))
 function smlmview(data::AbstractArray{T,N};
                   display_dims::Tuple{Int,Int}=(1, 2),
                   dim_names::Union{Nothing,NTuple{N,String}}=nothing,
-                  clip::Tuple{Real,Real}=(0.001, 0.999),
+                  clip::Tuple{Real,Real}=(0.0, 1.0),
                   title::String="",
                   colormap::Symbol=:grays,
                   figsize::Tuple{Int,Int}=(800, 700),
@@ -147,10 +147,11 @@ function smlmview(data::AbstractArray{T,N};
         stretch = obs_stretch[]
 
         # Get source data for colorrange: global dataset or current slice
+        # Use extract_slice_raw (not prepare_slice_nd) to get raw values without display transforms
         if stretch == :global
             source_data = data
         else  # :slice
-            source_data = prepare_slice_nd(data, obs_display_dims[], slice_indices)
+            source_data = extract_slice_raw(data, obs_display_dims[], slice_indices)
         end
 
         crange = compute_colorrange_sampled(source_data, mapping.clip)

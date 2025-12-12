@@ -3,6 +3,27 @@
 =============================================================================#
 
 """
+    extract_slice_raw(data, display_dims, slice_indices) -> AbstractArray
+
+Extract raw 2D slice WITHOUT display transformations (no flip/transpose).
+Used for statistics calculation where we need actual values, not display-oriented data.
+"""
+function extract_slice_raw(data::AbstractArray{T,N},
+                           display_dims::Tuple{Int,Int},
+                           slice_indices::Vector{Observable{Int}}) where {T,N}
+    # Build index tuple
+    idx = ntuple(N) do i
+        if i == display_dims[1] || i == display_dims[2]
+            Colon()
+        else
+            slice_indices[i][]
+        end
+    end
+    # Return view (no copy, no transformations)
+    return @view data[idx...]
+end
+
+"""
 Convert keyboard key to number (1-9), or nothing.
 """
 function key_to_number(key)
@@ -151,8 +172,8 @@ function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{R
             end
         end
 
-        if clip != (0.0, 1.0) && npixels > 0
-            # Need quantiles, collect samples
+        if (clip[1] > 0.0 || clip[2] < 1.0) && npixels > 0
+            # Need quantiles if clip is not full range
             samples = Float64[]
             for val in data
                 v = Float64(real(val))
@@ -181,7 +202,7 @@ function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{R
             return (0.0, 1.0)
         end
 
-        if clip == (0.0, 1.0)
+        if clip[1] <= 0.0 && clip[2] >= 1.0
             lo, hi = extrema(samples)
         else
             lo, hi = quantile(samples, (clip[1], clip[2]))
