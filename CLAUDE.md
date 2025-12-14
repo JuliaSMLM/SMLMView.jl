@@ -1,173 +1,66 @@
 # CLAUDE.md
 
-## Package Overview
-
-SMLMView is a Julia package providing an interactive array/image viewer inspired by DIPimage's `dipshow`. Primary design goals:
-
-- **WGLMakie-first**: Optimized for web/server deployment
-- **Low latency**: <50ms slice navigation, display only current 2D slice
-- **Minimalist UI**: Clean dropdowns, no clutter, maximum image area
-
-## Design Reference
-
-See `PRD.md` for complete product requirements. Key points:
-
-### Zoom System
-- **View Zoom** (`i/o`): Magnification levels (1/4x, 1/2x, 1x, 2x, 4x, 8x, 16x)
-  - At 1x: Full image visible
-  - At 2x: See half the pixels, each displayed 2x larger
-- **Reset** (`r`): Fit entire image in view
-- **Figure size**: Auto-calculated from image aspect ratio (via `figsize` max constraint)
-
-### Key Shortcuts (Implemented)
-- `i`: Zoom in (see fewer pixels, each larger)
-- `o`: Zoom out (see more pixels, each smaller)
-- `r`: Reset view (fit entire image)
-- `e/s/d/f`: Pan up/left/down/right (jump = 1/4 of min visible dimension)
-- Mouse hover: Shows pixel value continuously
-
-### Key Shortcuts (Implemented - 3D)
-- `j/l`: Previous/next z-slice
-
-### Key Shortcuts (Future)
-- `f/b`: Forward/back frame (4D)
-- `c`: Cycle mapping (linear/log/sqrt)
-- `s`: Cycle stretch (global/frame/none)
-
-### UI Layout (Current - 3D)
-```
-┌─ Status: (row, col) = value │ z: 5/100 │ Zoom: 1x │ 128×256×100 Float64 ──┐
-│                                                                            │
-│                            Image Display                                   │
-│                                                                            │
-├─ Z Slider: [═══════════════●═════════════════════════════════════════════]─┤
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-### UI Layout (Future)
-```
-┌─ Dropdowns: [Stretch ▾] [Mapping ▾] [Clip ▾] ─────────────────────┐
-│                        Image Display                              │
-├─ Sliders: Z: [═══●═══] T: [═══●═══] ─────────────────────────────┤
-│ Status: (row, col) = value │ Zoom: 2x │ 512×512 Float32          │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-## Technical Architecture
-
-### Backend
-- Primary: WGLMakie with Bonito server configuration
-- Optional: GLMakie for native desktop (via extension)
-
-### Dependencies
-```toml
-[deps]
-WGLMakie, Observables, Statistics
-
-[weakdeps]
-GLMakie, SMLMData, Images
-```
-
-### WGLMakie Setup (Auto-Configured)
-SMLMView automatically configures Bonito on first `smlmview()` call:
-```julia
-using SMLMView
-smlmview(rand(256, 256))  # Just works!
-```
-
-For manual control or custom port:
-```julia
-using SMLMView
-configure_display!(port=8080)  # Optional: call before smlmview()
-```
-
-**Critical for VSCode Remote**: The `proxy_url` parameter is set automatically to enable
-WebSocket tunneling through VSCode's port forwarding.
-
-### VSCode Remote WebSocket Ports
-VSCode Dev Tunnels/Remote only forward WebSocket on specific ports:
-```
-443, 3000, 3001, 4000, 4200, 5000, 5001, 5173, 5174,
-5500, 5555, 6006, 7777, 7860, 8000, 8050, 8080, 8081,
-8089, 8888, 9291
-```
-Default port 8080 is used. Check VSCode's Ports panel if display issues occur.
-
-### Troubleshooting: Figure Not Appearing
-If the viewer doesn't display after calling `smlmview()`:
-1. Open VSCode's **Ports** panel (View → Ports)
-2. Find port 8080 in the list
-3. **Remove** the port forwarding (right-click → Stop Forwarding)
-4. **Re-add** port 8080 (click "Forward a Port", enter 8080)
-5. Try `smlmview()` again
-
-This often fixes stale WebSocket connections after Julia restarts.
-
-## Implementation Notes
-
-### WGLMakie Texture Limitation
-- **Heatmap texture dimensions are fixed at creation**: When coordinate observables change length (e.g., xs from 1:128 to 1:64), WGLMakie doesn't reallocate the texture
-- **Symptom**: Interleaved/garbled display when switching `display_dims` to differently-shaped view
-- **Solution**: Recreate heatmap with `empty!(ax)` + `heatmap!(...)` when `display_dims` changes
-- **Slice navigation is fine**: Same texture shape, only values change
-
-### Image Orientation (MATLAB/DIPimage Convention)
-- **Top-left = (1,1)**: Row 1 at top, column 1 at left
-- **Data mapping**: `heatmap!(ax, reverse(data, dims=1)')` - flip rows then transpose
-- **Interpolation**: `interpolate=false` for nearest neighbor (crisp pixels)
-- **Coordinates**: Mouse Y maps to `row = nrows - screen_y + 1`, display as `(row, col) = value`
-- **Note**: `yreversed=true` doesn't work reliably in WGLMakie, so we flip data instead
-
-### Phase 1 (MVP) - COMPLETE
-1. WGLMakie figure with Bonito config (port 8080)
-2. 2D image display via `heatmap!` with transpose
-3. Linear intensity mapping with percentile clipping
-4. Mouse hover → pixel value in status bar
-5. Correct orientation: (1,1) at top-left
-6. Nearest neighbor interpolation (crisp pixels)
-7. Rectangular images display correctly (width=ncols, height=nrows)
-8. View zoom (`i/o`) with magnification levels
-9. Reset view (`r`) to fit entire image
-10. Auto-sized figure based on image aspect ratio
-11. Basic status bar with coordinates and zoom
-12. 3D support with z-slice navigation (j/l keys)
-13. Z-slider with bidirectional sync (slider ↔ keyboard)
-
-### Performance Priorities
-- Only render current 2D slice (lazy for ND)
-- Nearest-neighbor interpolation for zoom (fast)
-- LRU cache for recent slices
-- Debounce rapid slider movements
-
-## Related Packages
-
-- **SMLMVis.jl**: Has existing PRD at `src/interact/PRD.md` with comprehensive dipshow feature list (used as reference)
-- **SMLMData.jl**: Core types, integrate via extension
-- **DIPlib/dipimage**: Original inspiration ([dipshow.m source](https://github.com/DIPlib/diplib/blob/master/dipimage/dipshow.m))
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Development Commands
 
 ```julia
+# Setup
 using Pkg
 Pkg.activate(".")
 Pkg.instantiate()
 
+# Run tests
+Pkg.test()
+
+# Interactive testing - Bonito auto-configures on first call
 using SMLMView
-
-# Quick test - Bonito auto-configured on first call
-data = rand(256, 256)
-smlmview(data)
-
-# 3D test
-data3d = rand(64, 128, 10)
-v = smlmview(data3d)  # Use j/l to navigate z-slices
+smlmview(rand(256, 256))              # 2D grayscale
+smlmview(rand(64, 128, 10))           # 3D stack (j/l to navigate)
+smlmview((rand(256,256), rand(256,256)))  # 2-channel composite
 ```
 
-### Keybindings API
-```julia
-get_keybindings()           # Show current bindings
-set_keybinding!(:zoom_in, "k")  # Change zoom_in to 'k'
-reset_keybindings!()        # Reset to defaults
-list_keys()                 # Valid key names
-list_actions()              # Configurable actions
-```
+Example scripts in `examples/` demonstrate various use cases.
+
+## Architecture Overview
+
+SMLMView is a WGLMakie-based interactive array viewer inspired by DIPimage's `dipshow`. Design goals: web deployment via WGLMakie, <50ms slice navigation, minimalist UI.
+
+### Source Files (`src/`)
+- **SMLMView.jl**: Module entry point, exports `smlmview`, keybinding APIs, `configure_display!`
+- **types.jl**: Constants (zoom levels, colormaps, mappings, stretch modes, channel colors)
+- **display.jl**: Bonito server configuration (`configure_display!`, auto-setup on first use)
+- **keybindings.jl**: User-configurable keybindings via Preferences.jl, persistent in LocalPreferences.toml
+- **tools.jl**: Helper functions - slice extraction, colorrange sampling, cursor updates, formatting
+- **viewer.jl**: Main `smlmview(data::AbstractArray)` - single-channel ND viewer with Observables-based reactivity
+- **viewer_composite.jl**: `smlmview(channels::Tuple)` - multi-channel RGB composite with additive blending
+
+### Key Design Patterns
+- **Observables-based reactivity**: All state (slice indices, zoom, colormap, cursor) stored in Observables; UI updates automatically via `on()` callbacks and `@lift` macros
+- **Lazy slice evaluation**: Only current 2D slice rendered; `prepare_slice_nd()` extracts and orients data on-demand
+- **WGLMakie texture recreation**: When `display_dims` changes, heatmap must be recreated via `empty!(ax)` + `heatmap!(...)` because texture dimensions are fixed at creation
+- **Image orientation**: MATLAB convention (1,1 at top-left) via `reverse(data, dims=1)` then `permutedims`
+
+### Keyboard Shortcuts (Configurable via Preferences.jl)
+- `i/o`: Zoom in/out
+- `r`: Reset view
+- `e/s/d/f`: Pan up/left/down/right
+- `j/l`: Previous/next slice
+- `c`: Cycle colormap (grays, inferno, viridis, turbo, plasma, twilight)
+- `m`: Cycle mapping (linear, log, p1_99, p5_95)
+- `g`: Cycle stretch (global, slice)
+- `1-9` + `1-9`: Two-number sequence changes display_dims (ND viewer)
+- `1/2/3`: Toggle channel visibility (composite viewer)
+
+## WGLMakie/VSCode Remote Setup
+
+Display auto-configures on first `smlmview()` call (port 8080). VSCode Remote only forwards WebSocket on specific ports - 8080 is one of them.
+
+**Troubleshooting**: If figure doesn't appear, reset VSCode port forwarding:
+1. Ports panel → Stop Forwarding port 8080
+2. Re-add port 8080
+3. Try `smlmview()` again
+
+## PRD Reference
+
+See `PRD.md` for complete product requirements, implementation phases, and deferred features.

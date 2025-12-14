@@ -1,6 +1,8 @@
-using SMLMView
 using Test
+using SMLMView
 
 @testset "SMLMView.jl" begin
-    # Write your tests here.
+    include("test_constants.jl")
+    include("test_keybindings.jl")
+    include("test_viewer.jl")
 end
