@@ -7,6 +7,8 @@
 
 WGLMakie-based interactive array viewer for N-dimensional microscopy data, inspired by DIPimage's `dipshow`.
 
+![SMLMView Interface](docs/src/assets/smlmview_screenshot.png)
+
 ## Installation
 
 ```julia
