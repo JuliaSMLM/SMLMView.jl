@@ -71,7 +71,3 @@ Display auto-configures on first `smlmview()` call (port 8080). VSCode Remote on
 1. Ports panel → Stop Forwarding port 8080
 2. Re-add port 8080
 3. Try `smlmview()` again
-
-## PRD Reference
-
-See `PRD.md` for complete product requirements, implementation phases, and deferred features.
