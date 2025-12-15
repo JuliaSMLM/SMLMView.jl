@@ -10,8 +10,11 @@ using Pkg
 Pkg.activate(".")
 Pkg.instantiate()
 
-# Run tests
+# Run all tests
 Pkg.test()
+
+# Run specific test file
+include("test/test_keybindings.jl")
 
 # Interactive testing - Bonito auto-configures on first call
 using SMLMView
@@ -41,7 +44,15 @@ SMLMView is a WGLMakie-based interactive array viewer inspired by DIPimage's `di
 - **WGLMakie texture recreation**: When `display_dims` changes, heatmap must be recreated via `empty!(ax)` + `heatmap!(...)` because texture dimensions are fixed at creation
 - **Image orientation**: MATLAB convention (1,1 at top-left) via `reverse(data, dims=1)` then `permutedims`
 
+### Two Viewer Modes
+1. **Single-channel viewer** (`viewer.jl`): `smlmview(data::AbstractArray)` - grayscale heatmap with colormaps
+2. **Composite viewer** (`viewer_composite.jl`): `smlmview(channels::Tuple)` - RGB additive blending, channel visibility toggles
+
+Both share common tools from `tools.jl` but have separate keyboard handling due to different state requirements.
+
 ### Keyboard Shortcuts (Configurable via Preferences.jl)
+Keybindings persist in `LocalPreferences.toml`. Use `set_keybinding!(:action, "key")` to customize.
+
 - `i/o`: Zoom in/out
 - `r`: Reset view
 - `e/s/d/f`: Pan up/left/down/right

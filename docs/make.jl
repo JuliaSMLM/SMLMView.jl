@@ -17,6 +17,7 @@ makedocs(;
         "Examples" => "examples.md",
         "API Reference" => "api.md",
     ],
+    warnonly=[:missing_docs],  # Allow internal functions to have docstrings without being in manual
 )
 
 deploydocs(;
