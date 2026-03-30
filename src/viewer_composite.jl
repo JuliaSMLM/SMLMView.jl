@@ -207,6 +207,10 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     end
 
     on(obs_mapping_idx) do _
+        mapping = obs_mapping[]
+        for i in 1:C
+            channel_ranges[i][] = compute_colorrange_sampled(channels[i], mapping.clip)
+        end
         update_composite!()
     end
 
