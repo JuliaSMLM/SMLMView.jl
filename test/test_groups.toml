@@ -1,0 +1,3 @@
+# Test groups (admiral decision 0008): Core only; test/*.jl run as Core files.
+
+[Core]
