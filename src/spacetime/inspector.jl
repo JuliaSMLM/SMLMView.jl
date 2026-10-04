@@ -223,8 +223,12 @@ function _add_frame_inspector!(
                 "$(length(matches)) shared colors: optimal GT↔FOUND identity " *
                 "match ($(round(gate, digits=2)) μm gate); unmatched remain unique"
             else
-                "FOUND: $(_set_display_name(frame_track_sets[:found], :found))" *
-                "  ·  GT: $(_set_display_name(frame_track_sets[:ground_truth], :ground_truth))"
+                found_name = _set_display_name(frame_track_sets[:found], :found)
+                truth_name = _set_display_name(
+                    frame_track_sets[:ground_truth],
+                    :ground_truth,
+                )
+                "FOUND: $found_name  ·  GT: $truth_name"
             end;
             color=RGBf(0.68, 0.72, 0.78),
             fontsize=12,

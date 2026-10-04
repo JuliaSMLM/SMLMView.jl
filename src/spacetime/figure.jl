@@ -1,6 +1,50 @@
 # The 3D figure: Axis3 with voxel, track, link and dimer layers, legend, view
 # controls, the root event router and the control self-test.
 
+# Link opacity: the mapping of the link weight, clamped to [0, 1].
+function _link_alpha(mapping, weight)
+    clamp(Float32(mapping(Float32(weight))), 0.0f0, 1.0f0)
+end
+
+# Width of one link segment. A number is the width itself; a function maps the link
+# weight. Either way a negative or non-finite width is an ArgumentError.
+function _checked_width(width, weight)
+    width = Float32(width)
+    isfinite(width) && width >= 0 && return width
+    throw(ArgumentError(
+        (isnothing(weight) ? "link_width = $width" : "link_width($weight) = $width") *
+        " must be finite and >= 0",
+    ))
+end
+_link_width(width::Real, weight) = _checked_width(width, nothing)
+_link_width(mapping, weight) = _checked_width(mapping(Float32(weight)), weight)
+
+# The `linewidth` of the links plot: a number, or one value per vertex (two per link).
+_link_widths(width::Real, weights) = _link_width(width, nothing)
+function _link_widths(mapping, weights)
+    Float32[_link_width(mapping, weight) for weight in weights for _ in 1:2]
+end
+
+# The argument check of `spacetime`.
+_check_link_width(width::Real) = (_link_width(width, nothing); nothing)
+function _check_link_width(mapping)
+    applicable(mapping, 0.5f0) || throw(ArgumentError(
+        "link_width must be a number or a function of the link weight"))
+    nothing
+end
+
+# Self-test: the drawn line width of the links plot matches the mapping.
+function _links_width_ok(width::Real, drawn, weights)
+    drawn isa Real && abs(Float32(drawn) - Float32(width)) <= 1.0f-6
+end
+function _links_width_ok(mapping, drawn, weights)
+    length(drawn) == 2 * length(weights) && all(eachindex(weights)) do index
+        expected = _link_width(mapping, weights[index])
+        abs(Float32(drawn[2index - 1]) - expected) <= 1.0f-6 &&
+            abs(Float32(drawn[2index]) - expected) <= 1.0f-6
+    end
+end
+
 # The dark theme applies to this build only; the session's theme is untouched.
 function build_figure(scene; kwargs...)
     with_theme(theme_dark()) do
@@ -268,17 +312,18 @@ function _build_figure(
     # Optional link-probability layer: one amber segment per alternative
     # (on_map == false) link, alpha = link_alpha(w), width = link_width (a
     # number, or a function of w for a per-segment width). MAP links are not
-    # drawn: they lie on the track segments, which already show them. Links belong to the FOUND
-    # source. Like the tracks, geometry is a fixed-length buffer clipped to the
-    # ROI; hidden links collapse to an off-screen pair so the immutable
-    # per-vertex color buffer stays aligned.
+    # drawn: they lie on the track segments, which already show them. Links
+    # belong to the FOUND source. Like the tracks, geometry is a fixed-length
+    # buffer clipped to the ROI; hidden links collapse to an off-screen pair so
+    # the immutable per-vertex color buffer stays aligned.
     links = get(scene, "links", nothing)
     drawn_link_indices = isnothing(links) ? Int[] :
         [index for index in eachindex(links["w"]) if !links["on_map"][index]]
     link_count = length(drawn_link_indices)
+    drawn_weights = isnothing(links) ? Float32[] :
+        Float32[links["w"][index] for index in drawn_link_indices]
     links_visible = Makie.Observable(true)
     link_colors = RGBAf[]
-    link_widths = Float32[]
     link_endpoints = Point3f[]
     links_plot = nothing
     link_points = nothing
@@ -293,10 +338,6 @@ function _build_figure(
                 _link_alpha(link_alpha, links["w"][index]),
             )
             push!(link_colors, color, color)
-            if !(link_width isa Real)
-                width = _link_width(link_width, links["w"][index])
-                push!(link_widths, width, width)
-            end
             push!(
                 link_endpoints,
                 Point3f(links["x0"][index], links["y0"][index], links["z0"][index]),
@@ -352,7 +393,7 @@ function _build_figure(
             ax,
             link_points;
             color=link_colors,
-            linewidth=link_width isa Real ? Float32(link_width) : link_widths,
+            linewidth=_link_widths(link_width, drawn_weights),
             transparency=true,
             overdraw=true,
             visible=links_plot_visible,
@@ -622,6 +663,7 @@ function _build_figure(
     # pan/zoom/rotate remains untouched and receives the original events.
     root_events = Makie.events(fig.scene)
     pointer_serial = Ref(0)
+    settle_task = Ref{Union{Nothing,Task}}(nothing)    # the latest press's settle task
     frame_click_origin = Ref{Union{Nothing,Point2f}}(nothing)
     slider_drag_active = Ref(false)
 
@@ -681,7 +723,7 @@ function _build_figure(
             # Use the trailing mouse-position update for painted controls. This
             # avoids intermittent misses caused by WGLMakie's 40 ms position
             # throttle without delaying native Axis interactions.
-            @async begin
+            settle_task[] = @async begin
                 sleep(0.055)
                 serial == pointer_serial[] || return
                 settled_position = root_events.mouseposition[]
@@ -868,19 +910,20 @@ function _build_figure(
                     Float64(toggle_center[1]),
                     Float64(toggle_center[2]),
                 )
+                settle_task[] = nothing
                 setindex!(
                     root_events.mousebutton,
                     Makie.MouseButtonEvent(Makie.Mouse.left, Makie.Mouse.press),
                 )
-                for _ in 1:50
-                    inspector.browser_event_count[] > 0 && break
-                    sleep(0.010)
-                end
+                # The router must have started its settle task; wait for it.
+                task = settle_task[]
+                settled = !isnothing(task) &&
+                    timedwait(() -> istaskdone(task), 5.0) === :ok
                 setindex!(
                     root_events.mousebutton,
                     Makie.MouseButtonEvent(Makie.Mouse.left, Makie.Mouse.release),
                 )
-                checks[:root_canvas_route] =
+                checks[:root_canvas_route] = settled &&
                     inspector.last_browser_action[] == "highlight" &&
                     !inspector.highlight_active[]
 
@@ -939,21 +982,8 @@ function _build_figure(
                                 1.0f-6
                         end
                     end
-                drawn_widths = links_plot.linewidth[]
-                checks[:links_width] = if link_width isa Real
-                    drawn_widths isa Real &&
-                        abs(Float32(drawn_widths) - Float32(link_width)) <= 1.0f-6
-                else
-                    length(drawn_widths) == 2 * link_count &&
-                    all(1:link_count) do index
-                        expected = _link_width(
-                            link_width,
-                            links["w"][drawn_link_indices[index]],
-                        )
-                        abs(Float32(drawn_widths[2index - 1]) - expected) <= 1.0f-6 &&
-                        abs(Float32(drawn_widths[2index]) - expected) <= 1.0f-6
-                    end
-                end
+                checks[:links_width] =
+                    _links_width_ok(link_width, links_plot.linewidth[], drawn_weights)
                 toggle_links!()
                 hidden_off = !links_visible[] && !links_plot.visible[] &&
                     !any(is_drawn(link_points[]))
@@ -977,11 +1007,11 @@ function _build_figure(
                 truth_scene = track_sets[:ground_truth]
                 truth_index = Dict(
                     id => index
-                    for (index, id) in enumerate(Int.(truth_scene["track_ids"]))
+                    for (index, id) in enumerate(_track_ids(truth_scene))
                 )
                 found_index = Dict(
                     id => index
-                    for (index, id) in enumerate(Int.(scene["track_ids"]))
+                    for (index, id) in enumerate(_track_ids(scene))
                 )
                 checks[:matched_trajectory_colors] = all(
                     scene["trajectory_color_matches"],
