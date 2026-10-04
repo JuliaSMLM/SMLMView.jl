@@ -177,7 +177,7 @@ end
 
 function _frame_track_data(track_scene, n_frames, sub_steps)
     n_tracks = length(track_scene["track_x"])
-    track_ids = Int.(get(track_scene, "track_ids", collect(1:n_tracks)))
+    track_ids = _track_ids(track_scene)
     length(track_ids) == n_tracks ||
         throw(ArgumentError("track IDs must align with serialized trajectories"))
     track_colors = track_scene["track_colors"]
@@ -299,6 +299,11 @@ function _frame_track_data(track_scene, n_frames, sub_steps)
         track_gap_paths,
         track_point_paths,
     )
+end
+
+# Ids of the tracks of a set: its `track_ids`, else 1:n_tracks.
+function _track_ids(track_scene)
+    Int.(get(track_scene, "track_ids", collect(1:length(track_scene["track_x"]))))
 end
 
 # Name of a track set for labels: the set's `display_name`, else a plain default.
