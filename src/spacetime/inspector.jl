@@ -229,6 +229,9 @@ function _add_frame_inspector!(
             color=RGBf(0.68, 0.72, 0.78),
             fontsize=12,
             halign=:left,
+            justification=:left,
+            word_wrap=true,
+            tellwidth=false,
         )
     end
     control_status_text = Makie.lift(
@@ -256,6 +259,8 @@ function _add_frame_inspector!(
         color=control_status_color,
         fontsize=11,
         halign=:right,
+        justification=:right,
+        word_wrap=true,
         tellwidth=false,
     )
 

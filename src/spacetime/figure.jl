@@ -512,6 +512,7 @@ function _build_figure(
         tellwidth=false,
         halign=:left,
         justification=:left,
+        word_wrap=true,
     )
 
     inspector = frame_inspector ?

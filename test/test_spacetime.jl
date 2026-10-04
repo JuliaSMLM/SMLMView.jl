@@ -211,6 +211,19 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test isfile(view.html) && endswith(view.html, ".html")
 
         # :server on a free port answers GET / with 200, then closes
+        function get_status(url)
+            status = 0
+            for _ in 1:50
+                status = try
+                    Downloads.request(url; throw=false, timeout=5).status
+                catch
+                    0
+                end
+                status == 200 && break
+                sleep(0.1)
+            end
+            status
+        end
         view = nothing
         for attempt in 1:20
             port = rand(30000:45000)
@@ -221,21 +234,23 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
                 attempt == 20 && rethrow()
             end
         end
+        held = view
         try
             @test view.url == "http://127.0.0.1:$(view.server.port)/"
-            status = 0
-            for _ in 1:50
-                status = try
-                    Downloads.request(view.url; throw=false, timeout=5).status
-                catch
-                    0
-                end
-                status == 200 && break
-                sleep(0.1)
+            @test get_status(view.url) == 200
+
+            # a taken port: Bonito moves on, and the url names the port actually used
+            taken = held.server.port
+            second = spacetime(scene; output=:server, port=taken)
+            try
+                @test second.server.port != taken
+                @test second.url == "http://127.0.0.1:$(second.server.port)/"
+                @test get_status(second.url) == 200
+            finally
+                close(second)
             end
-            @test status == 200
         finally
-            close(view)
+            close(held)
         end
     end
 

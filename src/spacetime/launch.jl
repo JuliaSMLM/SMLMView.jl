@@ -97,7 +97,8 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
     default) the figure is served without opening a tab; target one frontend
     afterwards with `sot-fe open-url <url> --fe <handle>`. Two clients on one figure
     corrupt its layout.
-  - `:server`: a standalone Bonito server on `127.0.0.1:port` for a script's own
+  - `:server`: a standalone Bonito server on `127.0.0.1:port` (the next free port
+    when `port` is taken; `url` names the port actually used) for a script's own
     process; prints the URL and the `sot-fe open-url` line. `wait(view)` keeps the
     process serving; `close(view)` stops it. Never chosen by `:auto`.
   - `:html`: a standalone HTML file at `html` (a fresh temporary directory when
@@ -177,7 +178,8 @@ function spacetime(
     elseif output === :server
         app = Bonito.App(() -> figure)
         server = Bonito.Server(app, "127.0.0.1", port)
-        url = "http://127.0.0.1:$port/"
+        # Bonito moves to the next free port when `port` is taken.
+        url = "http://127.0.0.1:$(server.port)/"
         println("spacetime serving at ", url)
         println("  target a frontend: sot-fe open-url ", url, " --fe <handle>")
     elseif output === :html
