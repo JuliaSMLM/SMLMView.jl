@@ -5,13 +5,15 @@
 
 The result of [`spacetime`](@ref).
 
-Fields: `figure` and `axis` (the Makie `Figure` and `Axis3`), `controls` (the
-builder's state NamedTuple: `inspector`, `roi_bounds`, `trajectory_source`,
-`self_test`, ...), `health` (`(; passed, checks, failures)` of the control
-self-test), `schema` (the scene's schema version), `url` (where it is served, or
-`nothing`), `html` (the exported file, or `nothing`), `versions` (Julia, WGLMakie
-and Bonito versions) and `server` (the Ship of Tools `BrowserView` or the Bonito
-server behind `url`, or `nothing`).
+Stable fields: `figure` and `axis` (the Makie `Figure` and `Axis3`), `health`
+(`(; passed, checks, failures)` of the control self-test), `schema` (the scene's
+schema version), `url` (where it is served, or `nothing`), `html` (the exported
+file, or `nothing`), `versions` (Julia, WGLMakie and Bonito versions) and `server`
+(the Ship of Tools `BrowserView` or the Bonito server behind `url`, or `nothing`).
+
+`controls` is the builder's internal state (inspector, ROI, `self_test`, ...) and
+may change in any release; do not rely on it. `spacetime(scene; output=:none).health`
+is the supported way to run the control self-test without serving.
 
 `wait(view)` blocks while a `:server` view is served; `close(view)` stops it.
 """
@@ -52,11 +54,8 @@ function Base.close(view::SpacetimeView)
     nothing
 end
 
-# The Ship of Tools REPL module, or nothing. `REPL_MODULE` lets tests stand in a stub.
-const REPL_MODULE = Ref{Union{Nothing,Module}}(nothing)
-
+# The Ship of Tools REPL module, or nothing.
 function _repl_module()
-    isnothing(REPL_MODULE[]) || return REPL_MODULE[]
     isdefined(Main, :ShipToolsRepl) ? getfield(Main, :ShipToolsRepl) : nothing
 end
 
@@ -67,8 +66,8 @@ function _serve_repl(repl, figure, open)
     # Makie's shared layout and move painted controls away from their hitboxes.
     if open
         Base.invokelatest(repl.wglshow, figure)
-    elseif :open in fieldnames(repl.BrowserView)
-        Base.invokelatest(() -> repl.wglshow(figure; open=false))
+    elseif Base.invokelatest(hasmethod, repl.wglshow, Tuple{Any}, (:open,))
+        Base.invokelatest(repl.wglshow, figure; open=false)
     else
         throw(ArgumentError(
             "spacetime(; output=:serve) needs Ship of Tools with " *
@@ -101,9 +100,10 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
     when `port` is taken; `url` names the port actually used) for a script's own
     process; prints the URL and the `sot-fe open-url` line. `wait(view)` keeps the
     process serving; `close(view)` stops it. Never chosen by `:auto`.
-  - `:html`: a standalone HTML file at `html` (a fresh temporary directory when
-    `nothing`); the path is printed. The file grows with the voxel count (about
-    27 MB for 64x64x100).
+  - `:html`: a standalone HTML file at `html`; the path is printed. With
+    `html=nothing` the file is `spacetime.html` in a fresh folder under the system
+    temp directory, which is not deleted when Julia exits. The file grows with the
+    voxel count (about 27 MB for 64x64x100).
   - `:none`: build and self-test only; returns the view without raising, even when
     the self-test fails, for tests and callers that serve the figure themselves.
 - `open`: open a browser tab from `:serve` (default `false`).
@@ -111,7 +111,9 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
   [0, 1]); default `identity`, so opacity is exactly `w`. A floor is
   `w -> max(w, 0.15)`; others are `sqrt` or `_ -> 1`.
 - `link_width`: a line width, or a function of `w` giving a per-segment width,
-  for example `w -> 0.5 + 3w`.
+  for example `w -> 0.5 + 3w`. A negative or non-finite width, scalar or from the
+  function, throws an `ArgumentError` (naming the weight for the function form).
+- `port`: first port tried by `:server`; an integer in 1:65535.
 - `size`: figure size in pixels.
 - `frame_inspector`: add the 2D frame inspector (frame slider, ROI, track pick).
 - `azimuth`, `elevation`: initial 3D view angles.
@@ -120,8 +122,14 @@ Validation (`validate_scene`) runs first and throws one `ArgumentError` listing
 every problem. A failing self-test throws before anything is served or written,
 naming the failed checks (except for `output=:none`).
 """
-function spacetime(
-    scene::AbstractDict;
+function spacetime(scene::AbstractDict; kwargs...)
+    _spacetime(scene, _repl_module(); kwargs...)
+end
+
+# `repl` is the Ship of Tools REPL module (or nothing); tests pass a stand-in.
+function _spacetime(
+    scene::AbstractDict,
+    repl;
     output::Symbol=:auto,
     open::Bool=false,
     html=nothing,
@@ -137,17 +145,15 @@ function spacetime(
         "output must be :auto, :serve, :server, :html or :none, got :$output"))
     applicable(link_alpha, 0.5f0) || throw(ArgumentError(
         "link_alpha must be a function of the link weight"))
-    link_width isa Real ? link_width >= 0 || throw(ArgumentError(
-        "link_width must be >= 0")) : applicable(link_width, 0.5f0) ||
-        throw(ArgumentError("link_width must be a number or a function of the link weight"))
-    repl = _repl_module()
+    _check_link_width(link_width)
+    1 <= port <= 65535 || throw(ArgumentError(
+        "port must be in 1:65535, got $port"))
     output === :auto && (output = isnothing(repl) ? :html : :serve)
     output === :serve && isnothing(repl) && throw(ArgumentError(
         "output=:serve needs Main.ShipToolsRepl (a Ship of Tools REPL); " *
         "use :html or :server elsewhere"))
 
-    schema = scene_schema(scene)
-    validate_scene(scene)
+    schema = validate_scene(scene)
     figure, axis, controls = build_figure(
         scene;
         resolution=size,
@@ -174,20 +180,21 @@ function spacetime(
     if output === :serve
         server = _serve_repl(repl, figure, open)
         url = string(server.url)
-        println("spacetime served at ", url)
+        @info "spacetime served at $url"
     elseif output === :server
         app = Bonito.App(() -> figure)
         server = Bonito.Server(app, "127.0.0.1", port)
         # Bonito moves to the next free port when `port` is taken.
         url = "http://127.0.0.1:$(server.port)/"
-        println("spacetime serving at ", url)
-        println("  target a frontend: sot-fe open-url ", url, " --fe <handle>")
+        @info "spacetime serving at $url\n  target a frontend: " *
+              "sot-fe open-url $url --fe <handle>"
     elseif output === :html
-        html_path = html === nothing ? joinpath(mktempdir(), "spacetime.html") :
+        html_path = html === nothing ?
+            joinpath(mktempdir(; prefix="spacetime_", cleanup=false), "spacetime.html") :
             String(html)
         mkpath(dirname(abspath(html_path)))
         Bonito.export_static(html_path, Bonito.App(() -> figure))
-        println("spacetime saved ", html_path)
+        @info "spacetime saved $html_path"
     end
     SpacetimeView(figure, axis, controls, health, schema, url, html_path, versions, server)
 end

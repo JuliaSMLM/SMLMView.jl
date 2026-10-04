@@ -5,7 +5,7 @@ module Spacetime
 
 using WGLMakie
 import WGLMakie.Makie
-import WGLMakie.Bonito
+import Bonito
 
 include("schema.jl")
 include("geometry.jl")
