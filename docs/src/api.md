@@ -15,6 +15,15 @@ smlmview
 configure_display!
 ```
 
+## Space-time Viewer
+
+See [Space-time viewer](spacetime.md) for the scene schema and output routes.
+
+```@docs
+spacetime
+SpacetimeView
+```
+
 ## Keybinding Functions
 
 ```@docs

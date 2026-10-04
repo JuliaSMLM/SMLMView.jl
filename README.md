@@ -30,6 +30,19 @@ ch1, ch2, ch3 = rand(256,256,10), rand(256,256,10), rand(256,256,10)
 smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 ```
 
+## Space-time viewer
+
+`spacetime` shows a tracking result as one interactive 3D scene (x, y, frame) of raw voxels and
+trajectories, with a linked 2D frame inspector, ground-truth switch and link-probability layer.
+The input is a plain scene `Dict` (schema `"spacetime/1"`, see the documentation page):
+
+```julia
+using SMLMView
+scene = SMLMView.SpaceTime.example_scene()      # a small hand-written scene
+view = spacetime(scene)                         # Ship of Tools REPL: served; else standalone HTML
+view = spacetime(scene; output=:html, html="scene.html")
+```
+
 ## Features
 
 - N-dimensional array viewing with slice navigation (`j`/`l` keys)
@@ -38,6 +51,7 @@ smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 - Global or per-slice contrast stretch
 - Configurable keybindings via Preferences.jl
 - Web-deployable via WGLMakie/Bonito
+- Space-time viewer for tracking results (`spacetime`)
 
 ## Keyboard Shortcuts
 
