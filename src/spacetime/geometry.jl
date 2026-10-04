@@ -161,13 +161,3 @@ function _xy_bounds(limits, x_extent, y_extent)
     x_lower < x_upper && y_lower < y_upper || return nothing
     Float32.((x_lower, x_upper, y_lower, y_upper))
 end
-
-# Link opacity: the mapping of the link weight, clamped to [0, 1].
-function _link_alpha(mapping, weight)
-    clamp(Float32(mapping(Float32(weight))), 0.0f0, 1.0f0)
-end
-
-# Link width for one segment: the width mapping of the link weight, at least 0.
-function _link_width(mapping, weight)
-    max(Float32(mapping(Float32(weight))), 0.0f0)
-end
