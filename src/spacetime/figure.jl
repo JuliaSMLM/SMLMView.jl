@@ -1,16 +1,23 @@
 # The 3D figure: Axis3 with voxel, track, link and dimer layers, legend, view
 # controls, the root event router and the control self-test.
 
-function build_figure(
+# The dark theme applies to this build only; the session's theme is untouched.
+function build_figure(scene; kwargs...)
+    with_theme(theme_dark()) do
+        _build_figure(scene; kwargs...)
+    end
+end
+
+function _build_figure(
     scene;
     resolution=(1100, 900),
     azimuth=1.22,
     elevation=0.34,
     frame_inspector=false,
-    return_state=false,
+    link_alpha=identity,
+    link_width=2.0,
 )
     background = RGBf(0.035, 0.038, 0.045)
-    set_theme!(theme_dark())
 
     source_frames = scene["source_frames"]
     n_frames = length(source_frames)
@@ -41,11 +48,7 @@ function build_figure(
     fig = Figure(size=resolution, backgroundcolor=background)
     ax = Axis3(
         fig[1, 1:2];
-        title=get(
-            scene,
-            "title",
-            "Cell9 raw intensity + inferred trajectories and dimers",
-        ),
+        title=get(scene, "title", "Raw intensity and trajectories"),
         xlabel="x (μm)",
         ylabel="y (μm, image orientation)",
         zlabel="source camera frame",
@@ -96,7 +99,7 @@ function build_figure(
 
     # Batch every trajectory layer into one plot.  WGLMakie pays a substantial
     # browser-side setup cost per plot; drawing the glow separately for every
-    # track left the canvas blank for a long time on real Cell9 scenes.  NaN
+    # track left the canvas blank for a long time on large scenes.  NaN
     # separators preserve independent tracks while per-vertex colors keep their
     # identities.
     continuous_capacity = maximum(
@@ -263,8 +266,9 @@ function build_figure(
     end
 
     # Optional link-probability layer: one amber segment per alternative
-    # (on_map == false) link, alpha = w. MAP links are not drawn: they lie on
-    # the track segments, which already show them. Links belong to the FOUND
+    # (on_map == false) link, alpha = link_alpha(w), width = link_width (a
+    # number, or a function of w for a per-segment width). MAP links are not
+    # drawn: they lie on the track segments, which already show them. Links belong to the FOUND
     # source. Like the tracks, geometry is a fixed-length buffer clipped to the
     # ROI; hidden links collapse to an off-screen pair so the immutable
     # per-vertex color buffer stays aligned.
@@ -274,6 +278,7 @@ function build_figure(
     link_count = length(drawn_link_indices)
     links_visible = Makie.Observable(true)
     link_colors = RGBAf[]
+    link_widths = Float32[]
     link_endpoints = Point3f[]
     links_plot = nothing
     link_points = nothing
@@ -281,9 +286,17 @@ function build_figure(
     if !isnothing(links)
         link_alt_color = RGBf(1.0, 0.62, 0.10)
         for index in drawn_link_indices
-            weight = clamp(Float32(links["w"][index]), 0.0f0, 1.0f0)
-            color = RGBAf(link_alt_color.r, link_alt_color.g, link_alt_color.b, weight)
+            color = RGBAf(
+                link_alt_color.r,
+                link_alt_color.g,
+                link_alt_color.b,
+                _link_alpha(link_alpha, links["w"][index]),
+            )
             push!(link_colors, color, color)
+            if !(link_width isa Real)
+                width = _link_width(link_width, links["w"][index])
+                push!(link_widths, width, width)
+            end
             push!(
                 link_endpoints,
                 Point3f(links["x0"][index], links["y0"][index], links["z0"][index]),
@@ -339,7 +352,7 @@ function build_figure(
             ax,
             link_points;
             color=link_colors,
-            linewidth=2.0,
+            linewidth=link_width isa Real ? Float32(link_width) : link_widths,
             transparency=true,
             overdraw=true,
             visible=links_plot_visible,
@@ -451,6 +464,7 @@ function build_figure(
     ylims!(ax, 0, y_extent)
     zlims!(ax, 0.5, n_frames + 0.5)
 
+    intensity_unit = String(get(scene, "raw_intensity_unit", "photons"))
     raw_render_mode = get(scene, "raw_render_mode", "thresholded")
     raw_description = if raw_render_mode == "all_voxels"
         normalization_quantile = scene["raw_normalization_quantile"]
@@ -458,29 +472,36 @@ function build_figure(
         "Gray translucent cubes: all $(length(raw_points)) calibrated raw pixels\n" *
         "Continuous opacity/intensity normalized at " *
         "q=$(round(normalization_quantile, digits=4)) " *
-        "($(round(normalization_high, digits=1)) photons)"
+        "($(round(normalization_high, digits=1)) $intensity_unit)"
     else
         threshold = scene["raw_threshold"]
         quantile = scene["raw_quantile"]
         "Gray blocks: brightest $(round(100 * (1 - quantile), digits=2))% " *
         "of calibrated raw pixels\nThreshold " *
-        "$(round(threshold, digits=1)) photons)"
+        "$(round(threshold, digits=1)) $intensity_unit"
     end
+    has_dimers = any(
+        render -> any(startswith("dimer_"), keys(render.track_scene)),
+        values(track_render_sets),
+    )
     legend_text = Makie.lift(trajectory_source) do source
         render = track_render_sets[source]
+        source_name = _set_display_name(render, source)
         source_description = source === :found ?
-            "inferred $state_source" : "ground-truth molecular"
-        dimer_description = if render.dimers.n_episodes == 0
-            "Gold: no reciprocal dimer episode in this displayed state"
+            "$source_name ($state_source)" : source_name
+        dimer_description = if !has_dimers
+            ""
+        elseif render.dimers.n_episodes == 0
+            "\nGold: no reciprocal dimer episode in this displayed state"
         else
-            "Gold: $(render.dimers.n_episodes) reciprocal dimer episode" *
+            "\nGold: $(render.dimers.n_episodes) reciprocal dimer episode" *
             (render.dimers.n_episodes == 1 ? "" : "s") * " (" *
             join(render.dimers.labels, ", ") * ")"
         end
         raw_description * "\n" *
-        "Colors: $(render.n_tracks) $source_description trajectories " *
-        "($(render.n_emitters) in-volume latent positions)  ·  " *
-        "Dashed: connection across missing latent frames\n" *
+        "Colors: $(render.n_tracks) trajectories, $source_description " *
+        "($(render.n_emitters) in-volume positions)  ·  " *
+        "Dashed: connection across missing frames" *
         dimer_description
     end
     Label(
@@ -906,25 +927,32 @@ function build_figure(
                 drawn_colors = links_plot.color[]
                 checks[:links_alpha] = length(drawn_colors) == 2 * link_count &&
                     all(1:link_count) do index
-                        !drawn[index] || (
-                            abs(
-                                Float32(drawn_colors[2index - 1].alpha) -
-                                clamp(
-                                    Float32(links["w"][drawn_link_indices[index]]),
-                                    0.0f0,
-                                    1.0f0,
-                                ),
-                            ) <= 1.0f-6 &&
-                            abs(
-                                Float32(drawn_colors[2index].alpha) -
-                                clamp(
-                                    Float32(links["w"][drawn_link_indices[index]]),
-                                    0.0f0,
-                                    1.0f0,
-                                ),
-                            ) <= 1.0f-6
-                        )
+                        !drawn[index] || begin
+                            expected = _link_alpha(
+                                link_alpha,
+                                links["w"][drawn_link_indices[index]],
+                            )
+                            abs(Float32(drawn_colors[2index - 1].alpha) - expected) <=
+                                1.0f-6 &&
+                            abs(Float32(drawn_colors[2index].alpha) - expected) <=
+                                1.0f-6
+                        end
                     end
+                drawn_widths = links_plot.linewidth[]
+                checks[:links_width] = if link_width isa Real
+                    drawn_widths isa Real &&
+                        abs(Float32(drawn_widths) - Float32(link_width)) <= 1.0f-6
+                else
+                    length(drawn_widths) == 2 * link_count &&
+                    all(1:link_count) do index
+                        expected = _link_width(
+                            link_width,
+                            links["w"][drawn_link_indices[index]],
+                        )
+                        abs(Float32(drawn_widths[2index - 1]) - expected) <= 1.0f-6 &&
+                        abs(Float32(drawn_widths[2index]) - expected) <= 1.0f-6
+                    end
+                end
                 toggle_links!()
                 hidden_off = !links_visible[] && !links_plot.visible[] &&
                     !any(is_drawn(link_points[]))
@@ -993,28 +1021,26 @@ function build_figure(
         (; passed, checks, failures)
     end
 
-    if return_state
-        return fig, ax, (;
-            inspector,
-            roi_bounds,
-            trajectory_source,
-            track_sets,
-            track_render_sets,
-            raw_plot,
-            trajectory_plots,
-            dimer_plots,
-            top_view_box,
-            reset_box,
-            links_plot,
-            links_visible,
-            links_box,
-            toggle_links=toggle_links!,
-            control_router,
-            set_top_view=set_top_view!,
-            reset_view=reset_view!,
-            reassert_browser_state=reassert_browser_state!,
-            self_test=control_self_test!,
-        )
-    end
-    fig, ax
+    fig, ax, (;
+        inspector,
+        roi_bounds,
+        trajectory_source,
+        legend_text,
+        track_sets,
+        track_render_sets,
+        raw_plot,
+        trajectory_plots,
+        dimer_plots,
+        top_view_box,
+        reset_box,
+        links_plot,
+        links_visible,
+        links_box,
+        toggle_links=toggle_links!,
+        control_router,
+        set_top_view=set_top_view!,
+        reset_view=reset_view!,
+        reassert_browser_state=reassert_browser_state!,
+        self_test=control_self_test!,
+    )
 end

@@ -10,7 +10,8 @@ function _add_frame_inspector!(
 )
     source_frames = scene["source_frames"]
     n_frames = length(source_frames)
-    n_frames > 0 || error("Cell9 frame inspector requires at least one frame")
+    n_frames > 0 ||
+        throw(ArgumentError("frame inspector requires at least one frame"))
     nx = scene["nx"]
     ny = scene["ny"]
     pixel_size = scene["pixel_size"]
@@ -165,9 +166,9 @@ function _add_frame_inspector!(
             elseif matched_ids[track_index] == 0
                 "  ·  unmatched"
             elseif source === :found
-                "  ·  ↔ molecule $(matched_ids[track_index])"
+                "  ·  matched GT id $(matched_ids[track_index])"
             else
-                "  ·  ↔ found trajectory id $(matched_ids[track_index])"
+                "  ·  matched found id $(matched_ids[track_index])"
             end
             "Selected: $(data.track_labels[track_index])  ·  $id_description " *
             "$(data.track_ids[track_index])$match_suffix"
@@ -222,7 +223,8 @@ function _add_frame_inspector!(
                 "$(length(matches)) shared colors: optimal GT↔FOUND identity " *
                 "match ($(round(gate, digits=2)) μm gate); unmatched remain unique"
             else
-                "FOUND: posterior consensus  ·  GT: simulated molecular truth"
+                "FOUND: $(_set_display_name(frame_track_sets[:found], :found))" *
+                "  ·  GT: $(_set_display_name(frame_track_sets[:ground_truth], :ground_truth))"
             end;
             color=RGBf(0.68, 0.72, 0.78),
             fontsize=12,
@@ -287,9 +289,9 @@ function _add_frame_inspector!(
         n_points = length(data.frame_points[frame_index])
         dimer_suffix = isempty(data.frame_dimer_label_texts[frame_index]) ? "" :
             "  ·  " * join(data.frame_dimer_label_texts[frame_index], ", ")
-        source_name = get(data.track_scene, "display_name", string(source))
+        source_name = _set_display_name(data, source)
         "Source frame $(source_frames[frame_index])  ·  " *
-        "$source_name: $n_points latent points$dimer_suffix"
+        "$source_name: $n_points points$dimer_suffix"
     end
 
     frame_axis = Axis(

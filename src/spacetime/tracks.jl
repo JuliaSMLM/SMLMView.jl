@@ -14,25 +14,27 @@ function _dimer_data(scene)
     track_indices = Int.(get(scene, "dimer_track_indices", zeros(Int, 0, 2)))
     track_ids = Int.(get(scene, "dimer_track_ids", zeros(Int, 0, 2)))
     n_episodes = length(xs)
-    length(ys) == n_episodes || error("Cell9 dimer x/y paths must align")
-    length(zs) == n_episodes || error("Cell9 dimer x/z paths must align")
+    length(ys) == n_episodes ||
+        throw(ArgumentError("dimer x/y paths must align"))
+    length(zs) == n_episodes ||
+        throw(ArgumentError("dimer x/z paths must align"))
     length(fine_frames) == n_episodes ||
-        error("Cell9 dimer paths/fine frames must align")
+        throw(ArgumentError("dimer paths/fine frames must align"))
     length(labels) == n_episodes ||
-        error("Cell9 dimer paths/labels must align")
+        throw(ArgumentError("dimer paths/labels must align"))
     size(track_indices) == (n_episodes, 2) ||
-        error("Cell9 dimer track-index pairs must be n×2")
+        throw(ArgumentError("dimer track-index pairs must be n×2"))
     size(track_ids) == (n_episodes, 2) ||
-        error("Cell9 dimer track-id pairs must be n×2")
+        throw(ArgumentError("dimer track-id pairs must be n×2"))
     for episode_index in 1:n_episodes
         n_points = length(xs[episode_index])
-        n_points > 0 || error("Cell9 dimer episodes cannot be empty")
+        n_points > 0 || throw(ArgumentError("dimer episodes cannot be empty"))
         length(ys[episode_index]) == n_points ||
-            error("Cell9 dimer episode x/y lengths must align")
+            throw(ArgumentError("dimer episode x/y lengths must align"))
         length(zs[episode_index]) == n_points ||
-            error("Cell9 dimer episode x/z lengths must align")
+            throw(ArgumentError("dimer episode x/z lengths must align"))
         length(fine_frames[episode_index]) == n_points ||
-            error("Cell9 dimer episode positions/frames must align")
+            throw(ArgumentError("dimer episode positions/frames must align"))
     end
     (;
         xs,
@@ -58,7 +60,7 @@ function _track_render_data(track_scene)
     n_tracks = length(track_scene["track_x"])
     track_colors = track_scene["track_colors"]
     size(track_colors) == (n_tracks, 3) ||
-        error("Cell9 track colors must be n_tracks×3")
+        throw(ArgumentError("track colors must be n_tracks×3"))
     continuous_points = Point3f[]
     continuous_halo_colors = RGBAf[]
     continuous_mid_colors = RGBAf[]
@@ -77,7 +79,7 @@ function _track_render_data(track_scene)
         zs = track_scene["track_z"][track_index]
         fine_frames = track_scene["track_fine_frames"][track_index]
         length(ys) == length(xs) == length(zs) == length(fine_frames) ||
-            error("Cell9 trajectory positions and fine frames must align")
+            throw(ArgumentError("trajectory positions and fine frames must align"))
         isempty(xs) && continue
 
         color = RGBf(
@@ -177,7 +179,7 @@ function _frame_track_data(track_scene, n_frames, sub_steps)
     n_tracks = length(track_scene["track_x"])
     track_ids = Int.(get(track_scene, "track_ids", collect(1:n_tracks)))
     length(track_ids) == n_tracks ||
-        error("Cell9 track IDs must align with serialized trajectories")
+        throw(ArgumentError("track IDs must align with serialized trajectories"))
     track_colors = track_scene["track_colors"]
     track_core_colors = RGBf[
         RGBf(
@@ -203,8 +205,7 @@ function _frame_track_data(track_scene, n_frames, sub_steps)
         ["$label_prefix$index" for index in 1:n_tracks],
     ))
     length(track_labels) == n_tracks ||
-        error("Cell9 track labels must align with serialized trajectories")
-
+        throw(ArgumentError("track labels must align with serialized trajectories"))
     for track_index in 1:n_tracks
         track_points_by_frame = Dict{Int,Vector{Point2f}}()
         for point_index in eachindex(track_scene["track_x"][track_index])
@@ -298,4 +299,13 @@ function _frame_track_data(track_scene, n_frames, sub_steps)
         track_gap_paths,
         track_point_paths,
     )
+end
+
+# Name of a track set for labels: the set's `display_name`, else a plain default.
+function _set_display_name(data, source)
+    String(get(
+        data.track_scene,
+        "display_name",
+        source === :found ? "found" : "ground truth",
+    ))
 end
