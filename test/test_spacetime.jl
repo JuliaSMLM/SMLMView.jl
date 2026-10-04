@@ -1,6 +1,6 @@
 using Test
 using SMLMView
-using SMLMView: SpaceTime, SpacetimeView
+using SMLMView: Spacetime, SpacetimeView
 using WGLMakie
 using Downloads
 
@@ -21,11 +21,11 @@ end
 wglshow(figure) = BrowserView("http://stub.invalid:2/")
 end
 
-example(; kwargs...) = SpaceTime.example_scene(; kwargs...)
+example(; kwargs...) = Spacetime.example_scene(; kwargs...)
 build(scene; kwargs...) = spacetime(scene; output=:none, kwargs...)
 luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 
-@testset "SpaceTime" begin
+@testset "Spacetime" begin
     @testset "truth, colour matches and links" begin
         view = build(example())
         @test view isa SpacetimeView
@@ -107,11 +107,11 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 
     @testset "schema declaration and validation" begin
         scene = example()
-        @test SpaceTime.scene_schema(scene) == "spacetime/1"
+        @test Spacetime.scene_schema(scene) == "spacetime/1"
         delete!(scene, "schema")
-        SpaceTime.UNDECLARED_NOTED[] = false
-        @test_logs (:info, r"schema") SpaceTime.scene_schema(scene)
-        @test_logs SpaceTime.scene_schema(scene)         # once per session
+        Spacetime.UNDECLARED_NOTED[] = false
+        @test_logs (:info, r"schema") Spacetime.scene_schema(scene)
+        @test_logs Spacetime.scene_schema(scene)         # once per session
         @test build(scene).schema == "spacetime/1"
         scene["schema"] = "spacetime/2"
         err = try; build(scene); nothing; catch e; e; end
@@ -119,7 +119,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test occursin("spacetime/2", err.msg) && occursin("spacetime/1", err.msg)
 
         for kw in ((;), (; truth=false), (; links=false), (; dimers=true))
-            @test SpaceTime.validate_scene(example(; kw...)) === nothing
+            @test Spacetime.validate_scene(example(; kw...)) === nothing
         end
 
         scene = example(); delete!(scene, "nx")
@@ -133,7 +133,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         scene["pixel_size"] = -1.0
         scene["links"]["w"] = scene["links"]["w"][1:2]
         scene["ground_truth_tracks"]["track_x"] = scene["ground_truth_tracks"]["track_x"][1:2]
-        err = try; SpaceTime.validate_scene(scene); nothing; catch e; e; end
+        err = try; Spacetime.validate_scene(scene); nothing; catch e; e; end
         @test err isa ArgumentError
         for text in ("raw_scaled_intensity", "track_x, track_y, track_z", "track_colors",
                      "pixel_size", "links: arrays", "ground_truth_tracks: track_x")
@@ -142,14 +142,14 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 
         scene = example(; truth=false)
         scene["trajectory_color_matches"] = [(; truth_id=1, estimate_id=1)]
-        err = try; SpaceTime.validate_scene(scene); nothing; catch e; e; end
+        err = try; Spacetime.validate_scene(scene); nothing; catch e; e; end
         @test err isa ArgumentError
         @test occursin("trajectory_color_matches needs ground_truth_tracks", err.msg)
         @test occursin("trajectory_color_match_gate", err.msg)
 
         scene = example(; dimers=true)
         scene["dimer_labels"] = String[]
-        err = try; SpaceTime.validate_scene(scene); nothing; catch e; e; end
+        err = try; Spacetime.validate_scene(scene); nothing; catch e; e; end
         @test err isa ArgumentError && occursin("dimer", err.msg)
 
         @test_throws ArgumentError spacetime("scene.jld2")
@@ -257,14 +257,14 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
     @testset "serve through Ship of Tools" begin
         scene = example()
         try
-            SpaceTime.REPL_MODULE[] = StubRepl
+            Spacetime.REPL_MODULE[] = StubRepl
             view = spacetime(scene)                                   # :auto picks :serve
             @test view.url == "http://stub.invalid:1/"
             @test view.server isa StubRepl.BrowserView && !view.server.open
             @test isnothing(view.html)
             view = spacetime(scene; output=:serve, open=true)
             @test view.server.open
-            SpaceTime.REPL_MODULE[] = StubReplOld                     # no `open` field
+            Spacetime.REPL_MODULE[] = StubReplOld                     # no `open` field
             err = try; spacetime(scene); nothing; catch e; e; end
             @test err isa ArgumentError && occursin("open=false", err.msg)
             @test spacetime(scene; open=true).url == "http://stub.invalid:2/"
@@ -272,7 +272,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
             bad = example(); bad["track_colors"][1, :] = Float32[0.5, 0.5, 0.5]
             @test_throws ErrorException spacetime(bad; output=:serve)
         finally
-            SpaceTime.REPL_MODULE[] = nothing
+            Spacetime.REPL_MODULE[] = nothing
         end
         if !isdefined(Main, :ShipToolsRepl)
             @test_throws ArgumentError spacetime(scene; output=:serve)

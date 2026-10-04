@@ -5,7 +5,7 @@ WGLMakie-based interactive array viewer for N-dimensional data, inspired by DIPi
 ## Exports Summary
 
 - **Types:** 0
-- **Functions:** 8
+- **Functions:** 7
 - **Constants:** 2
 
 ## Key Concepts
@@ -88,47 +88,6 @@ Launch viewer for multi-channel RGB composite (2-3 channels).
 using SMLMView
 ch1, ch2, ch3 = rand(256,256,10), rand(256,256,10), rand(256,256,10)
 v = smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
-```
-
-### spacetime
-
-```julia
-spacetime(scene::AbstractDict; output=:auto, open=false, html=nothing, port=9384,
-          link_alpha=identity, link_width=2.0, size=(1640, 920),
-          frame_inspector=true, azimuth=1.22, elevation=0.34) -> SpacetimeView
-```
-
-Interactive space-time view of a single-molecule tracking result: raw voxels and
-trajectories in a 3D (x, y, frame) scene with a linked 2D frame inspector.
-
-**Arguments:**
-- `scene::AbstractDict`: a `Dict{String,Any}` in the `"spacetime/1"` schema (required keys
-  `nx`, `ny`, `pixel_size`, `sub_steps`, `source_frames`, `state_source`, `raw_xyz`,
-  `raw_scaled_intensity`, `track_x/y/z`, `track_fine_frames`, `track_colors`; optional
-  `ground_truth_tracks`, `trajectory_color_matches`, `links`, `dimer_*`, labels). See the
-  documentation page "Space-time viewer" for the schema.
-
-**Keywords:**
-- `output::Symbol=:auto`: `:serve` (Ship of Tools `wglshow`), `:server` (standalone Bonito
-  server), `:html` (standalone file), `:none` (build and self-test only); `:auto` is `:serve`
-  in a Ship of Tools REPL, else `:html`
-- `open::Bool=false`: open a browser tab from `:serve`
-- `html=nothing`: path of the `:html` file (a temporary directory by default)
-- `port::Int=9384`: port of `:server`
-- `link_alpha=identity`: function of the link weight giving opacity (clamped to `[0, 1]`)
-- `link_width=2.0`: a width, or a function of the link weight
-- `size`, `frame_inspector`, `azimuth`, `elevation`: figure size, 2D inspector, 3D view angles
-
-**Returns:** `SpacetimeView` with `figure`, `axis`, `controls` (state, including `self_test`),
-`health` (`(; passed, checks, failures)`), `schema`, `url`, `html`, `versions`, `server`.
-A failing control self-test throws before anything is served or written (not for `:none`).
-
-**Example:**
-```julia
-using SMLMView
-scene = SMLMView.SpaceTime.example_scene()
-view = spacetime(scene; output=:html, html="scene.html")
-view = spacetime(scene; link_alpha = w -> max(w, 0.15), link_width = w -> 0.5 + 3w)
 ```
 
 ### configure_display!

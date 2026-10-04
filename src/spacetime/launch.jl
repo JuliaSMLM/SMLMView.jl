@@ -86,7 +86,7 @@ end
 
 Build the interactive space-time view of a scene (a `Dict{String,Any}` in the
 `"spacetime/1"` schema, see the Space-time viewer page and
-[`SMLMView.SpaceTime.validate_scene`](@ref)), run its control self-test, then
+[`SMLMView.Spacetime.validate_scene`](@ref)), run its control self-test, then
 serve or export it. The scene is a Dict, not a path: load it first, for example
 with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
 

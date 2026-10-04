@@ -38,7 +38,7 @@ The input is a plain scene `Dict` (schema `"spacetime/1"`, see the documentation
 
 ```julia
 using SMLMView
-scene = SMLMView.SpaceTime.example_scene()      # a small hand-written scene
+scene = SMLMView.Spacetime.example_scene()      # a small hand-written scene
 view = spacetime(scene)                         # Ship of Tools REPL: served; else standalone HTML
 view = spacetime(scene; output=:html, html="scene.html")
 ```

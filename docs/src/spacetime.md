@@ -36,12 +36,12 @@ as the reference example of every key:
 
 ```@example spacetime
 using SMLMView
-scene = SMLMView.SpaceTime.example_scene(; truth=true, links=true, dimers=true)
+scene = SMLMView.Spacetime.example_scene(; truth=true, links=true, dimers=true)
 sort(collect(keys(scene)))
 ```
 
 ```julia
-view = spacetime(SMLMView.SpaceTime.example_scene(); output=:html)
+view = spacetime(SMLMView.Spacetime.example_scene(); output=:html)
 ```
 
 ## Scene schema `"spacetime/1"`
@@ -163,7 +163,7 @@ as `"spacetime/1"`, with one `@info` per session suggesting the exporter add the
 declared value throws an `ArgumentError` naming the supported versions. A new version of the
 schema will get a new number; `"spacetime/1"` scenes keep working.
 
-[`SMLMView.SpaceTime.validate_scene`](@ref) checks the declaration, the required keys with
+[`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, the required keys with
 their types and shapes, and the optional parts before anything is built, and throws one
 `ArgumentError` listing every problem. `spacetime` calls it first.
 
@@ -212,7 +212,7 @@ not changed.
 [`spacetime`](@ref) and [`SpacetimeView`](@ref) are in the [API Reference](api.md).
 
 ```@docs
-SMLMView.SpaceTime.validate_scene
-SMLMView.SpaceTime.scene_schema
-SMLMView.SpaceTime.example_scene
+SMLMView.Spacetime.validate_scene
+SMLMView.Spacetime.scene_schema
+SMLMView.Spacetime.example_scene
 ```

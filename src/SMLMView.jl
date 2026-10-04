@@ -22,8 +22,8 @@ include("display.jl")
 include("tools.jl")
 include("viewer.jl")
 include("viewer_composite.jl")
-include("spacetime/SpaceTime.jl")
-using .SpaceTime: spacetime, SpacetimeView
+include("spacetime/Spacetime.jl")
+using .Spacetime: spacetime, SpacetimeView
 
 function __init__()
     load_keybindings!()
