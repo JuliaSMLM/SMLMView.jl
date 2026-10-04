@@ -56,10 +56,10 @@ view = spacetime(SMLMView.Spacetime.example_scene(); output=:html)
 | `source_frames` | `Vector{Int}` | the source frame numbers, non-empty, for example `collect(1:T)` |
 | `state_source` | `String` | what the shown tracks are, for example `"map"` (shown in the legend) |
 | `raw_xyz` | `Matrix{Float32}`, `(nx*ny*T, 3)` | voxel centers (x, y, frame), see the conventions |
-| `raw_scaled_intensity` | `Vector{Float32}`, length `nx*ny*T` | voxel intensity scaled to `[0, 1]`, same order as `raw_xyz` |
+| `raw_scaled_intensity` | `Vector{Float32}`, length `nx*ny*T` | voxel intensity scaled to `[0, 1]` (finite), same order as `raw_xyz` |
 | `track_x`, `track_y`, `track_z` | `Vector{Vector{Float32}}` | one vector per track: position in μm and z in frames |
 | `track_fine_frames` | `Vector{Vector{Int}}` | the (fine) frame of each track point; a jump `> 1` is drawn as a dashed gap segment |
-| `track_colors` | `Matrix{Float32}`, `(n_tracks, 3)` | RGB in 0 to 1 |
+| `track_colors` | `Matrix{Float32}`, `(n_tracks, 3)` | RGB, every value in `[0, 1]` |
 
 `T = length(source_frames)`. How the raw voxels are described in the legend depends on the
 optional `raw_render_mode`:
@@ -74,14 +74,14 @@ optional `raw_render_mode`:
 |---|---|---|
 | `schema` | `String` | `"spacetime/1"`, see the declaration rule |
 | `title` | `String` | 3D axis title (default `"Raw intensity and trajectories"`) |
-| `track_ids` | `Vector{Int}` | id of each track (default `1:n_tracks`) |
+| `track_ids` | `Vector{Int}` | id of each track, one per track (default `1:n_tracks`; the default is used everywhere, including `trajectory_color_matches`) |
 | `track_labels` | `Vector{String}` | label of each track (default prefix + index) |
 | `track_label_prefix` | `String` | label prefix, default `"T"` |
 | `track_id_description` | `String` | what `track_ids` are, default `"trajectory id"` |
 | `display_name` | `String` | name of this track set in titles and the legend (default `"found"`, `"ground truth"`) |
-| `matched_other_ids` | `Vector{Int}` | per track, the id of its match in the other set, `0` for none |
+| `matched_other_ids` | `Vector{Int}`, one per track | per track, the id of its match in the other set, `0` for none |
 | `raw_intensity_unit` | `String` | unit in the legend, default `"photons"` |
-| `raw_alpha_min`, `raw_alpha_max`, `raw_alpha_gamma` | `Float` | voxel opacity range and gamma (defaults `0.0005`, `0.06`, `1.15`) |
+| `raw_alpha_min`, `raw_alpha_max`, `raw_alpha_gamma` | `Float` | voxel opacity range, each in `[0, 1]`, and gamma `> 0` (defaults `0.0005`, `0.06`, `1.15`) |
 | `ground_truth_tracks` | `Dict` | a second track set, see below |
 | `trajectory_color_matches`, `trajectory_color_match_gate` | see below | shared colors for matched tracks |
 | `links` | `Dict` | link probabilities, see below |
@@ -89,7 +89,8 @@ optional `raw_render_mode`:
 
 ### Coordinate conventions
 
-All positions are in μm; `z` is the frame (with `sub_steps = k`, the fine frame is the model
+Every number the viewer reads must be finite, and the ranges above are enforced. All
+positions are in μm; `z` is the frame (with `sub_steps = k`, the fine frame is the model
 step, `track_fine_frames` holds it and `z = (step - 0.5)/k + 0.5`).
 
 - A voxel at image row `r`, column `c` and frame `f` is at
@@ -149,23 +150,30 @@ segments, which are already drawn), for the found set only, clipped to the ROI, 
 
 ### Dimers
 
-Optional dimer episodes, drawn as a gold path with a label: `dimer_x`, `dimer_y`, `dimer_z`
-(`Vector{Vector{Float32}}`, one vector per episode, same convention as tracks),
-`dimer_fine_frames` (`Vector{Vector{Int}}`), `dimer_labels` (`Vector{String}`) and optionally
-`dimer_track_indices` and `dimer_track_ids` (`n_episodes x 2` matrices). They may be given
-for the found set and inside `ground_truth_tracks`. The legend names dimers only when the
-scene has `dimer_*` keys.
+Optional dimer episodes, drawn as a gold path with a label. A set that has any `dimer_*` key
+needs `dimer_x`, `dimer_y`, `dimer_z` (`Vector{Vector{Float32}}`, one non-empty vector per
+episode, same convention as tracks), `dimer_fine_frames` (`Vector{Vector{Int}}`) and
+`dimer_labels` (`Vector{String}`), aligned per episode. When there is at least one episode,
+`dimer_track_indices` and `dimer_track_ids` (`n_episodes x 2` integer matrices) are required
+too. Dimers may be given for the found set and inside `ground_truth_tracks`. The legend names
+dimers only when the scene has `dimer_*` keys.
 
 ### The declaration rule
 
 A scene declares its schema with `"schema" => "spacetime/1"`. A scene without the key is read
-as `"spacetime/1"`, with one `@info` per session suggesting the exporter add the key. Any other
-declared value throws an `ArgumentError` naming the supported versions. A new version of the
-schema will get a new number; `"spacetime/1"` scenes keep working.
+as `"spacetime/1"`, with one `@info` per session suggesting the exporter add the key. The
+absence of the key is the only fallback: a key that is present must be a string equal to a
+supported version, so `nothing`, a `Symbol` or another version throws an `ArgumentError`
+naming the supported versions. A new version of the schema will get a new number;
+`"spacetime/1"` scenes keep working.
 
-[`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, the required keys with
-their types and shapes, and the optional parts before anything is built, and throws one
-`ArgumentError` listing every problem. `spacetime` calls it first.
+[`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, every key the viewer
+reads with its type, shape and range, and the optional parts before anything is built, and
+throws one `ArgumentError` listing every problem. A scene it accepts builds and runs the
+control self-test without throwing. `spacetime` calls it first.
+
+The public, non-exported names of the `SMLMView.Spacetime` module are `example_scene`,
+`validate_scene` and `scene_schema`; they are declared `public` on Julia 1.11 and later.
 
 ## Link opacity and width
 
@@ -180,8 +188,9 @@ spacetime(scene; link_alpha = _ -> 1, link_width = w -> 0.5 + 3w)   # width carr
 ```
 
 `link_alpha` is a function of `w`, its result clamped to `[0, 1]`. `link_width` is a number or
-a function of `w` giving a per-segment width. The control self-test checks the drawn colors
-(`links_alpha`) and widths (`links_width`) against the chosen mapping.
+a function of `w` giving a per-segment width; a negative or non-finite width throws an
+`ArgumentError` (for the function form it names the weight). The control self-test checks the
+drawn colors (`links_alpha`) and widths (`links_width`) against the chosen mapping.
 
 ## Output routes
 
@@ -193,8 +202,8 @@ self-test runs first (a failed check throws before anything is served or written
 |---|---|
 | `:auto` | `:serve` when `Main.ShipToolsRepl` is defined, else `:html` |
 | `:serve` | `Main.ShipToolsRepl.wglshow(figure; open)`; `open=false` by default, then target one frontend with `sot-fe open-url <url> --fe <handle>` |
-| `:server` | a Bonito server on `127.0.0.1:port`, for a standalone script; prints the URL; `wait(view)` keeps the process serving, `close(view)` stops it |
-| `:html` | standalone HTML at `html` (a fresh temporary directory by default) |
+| `:server` | a Bonito server on `127.0.0.1:port` (`port` in 1:65535; the next free port when it is taken, and `view.url` names the port used), for a standalone script; prints the URL; `wait(view)` keeps the process serving, `close(view)` stops it |
+| `:html` | standalone HTML at `html`; by default `spacetime.html` in a fresh `spacetime_*` folder under the temp directory, which persists after Julia exits |
 | `:none` | build and self-test only; the returned `SpacetimeView` carries `health` |
 
 ```julia
@@ -202,10 +211,11 @@ view = spacetime(scene; output=:server, port=9384)   # in a script
 wait(view)
 ```
 
-The result is a [`SpacetimeView`](@ref) with the figure, axis, the builder's state
-(`controls`, including `self_test`), the self-test `health`, and the `url` or `html` it was
-sent to. The figure is built inside `with_theme(theme_dark())`, so the session's theme is
-not changed.
+The result is a [`SpacetimeView`](@ref). Its stable fields are `figure`, `axis`, `health` (the
+control self-test result), `schema`, `url`, `html`, `versions` and `server`; `controls` is
+internal state that may change in any release. `spacetime(scene; output=:none).health` is the
+supported way to run the control self-test without serving. The figure is built inside
+`with_theme(theme_dark())`, so the session's theme is not changed.
 
 ## Reference
 
