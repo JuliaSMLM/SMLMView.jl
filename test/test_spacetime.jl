@@ -22,6 +22,7 @@ wglshow(figure) = BrowserView("http://stub.invalid:2/")
 end
 
 example(; kwargs...) = Spacetime.example_scene(; kwargs...)
+include("long/utils/mutations.jl")      # shared with the Long group
 build(scene; kwargs...) = spacetime(scene; output=:none, kwargs...)
 # The launcher with a stand-in Ship of Tools REPL module (or nothing).
 launch(scene, repl; kwargs...) = Spacetime._spacetime(scene, repl; kwargs...)
@@ -121,13 +122,33 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
             @test occursin("unsupported spacetime schema", err.msg)
             @test occursin("spacetime/1", err.msg)
         end
-        @test Spacetime.validate_scene(example()) == "spacetime/1"
+        @test Spacetime.validate_scene(example())["schema"] == "spacetime/1"
+        undeclared = example(); delete!(undeclared, "schema")
+        @test Spacetime.validate_scene(undeclared)["schema"] == "spacetime/1"
     end
 
     @testset "validation" begin
         for kw in ((;), (; truth=false), (; links=false), (; dimers=true))
-            @test Spacetime.validate_scene(example(; kw...)) == "spacetime/1"
+            @test Spacetime.validate_scene(example(; kw...)) isa Dict{String,Any}
         end
+        # the canonical scene is new, canonical-typed arrays are reused, the input is kept
+        scene = example()
+        scene["pixel_size"] = 0.1f0
+        scene["raw_xyz"] = Float64.(scene["raw_xyz"])
+        scene["track_x"] = [Float64.(path) for path in scene["track_x"]]
+        before = deepcopy(scene)
+        canonical = Spacetime.validate_scene(scene)
+        @test scene == before
+        @test canonical !== scene
+        @test canonical["pixel_size"] isa Float64
+        @test canonical["raw_xyz"] isa Matrix{Float32}
+        @test canonical["track_x"] isa Vector{Vector{Float32}}
+        @test canonical["raw_scaled_intensity"] === scene["raw_scaled_intensity"]
+        @test canonical["links"] !== scene["links"]
+        @test canonical["links"]["w"] === scene["links"]["w"]
+        @test canonical["trajectory_color_matches"] isa
+              Vector{@NamedTuple{truth_id::Int, estimate_id::Int}}
+        @test build(scene).health.passed
         problems(scene) = try
             Spacetime.validate_scene(scene); ""
         catch e
@@ -180,6 +201,30 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test occursin("track_colors", problems(scene))
         scene = example(); scene["raw_alpha_gamma"] = 0
         @test occursin("raw_alpha_gamma", problems(scene))
+
+        # integers the builder cannot hold as Int, derived extents, link weights
+        for key in ("track_ids", "matched_other_ids")
+            for bad in (typemax(UInt64), big(2)^100)
+                scene = example(; truth=false)
+                scene[key] = [bad, 2, 3]
+                @test occursin(key, problems(scene))
+            end
+        end
+        scene = example(; dimers=true)
+        scene["dimer_track_ids"] = reshape([typemax(UInt64), 2], 1, 2)
+        @test occursin("dimer_track_ids", problems(scene))
+        for size in (1e-100, 1e100)
+            scene = example(); scene["pixel_size"] = size
+            @test occursin("pixel_size", problems(scene))
+        end
+        scene = example(); scene["links"]["w"][2] = -0.3f0
+        @test occursin("links: w", problems(scene))
+        @test_throws ArgumentError build(scene; link_alpha=sqrt)
+        scene = example(); scene["raw_quantile"] = 2
+        scene["raw_normalization_quantile"] = 2
+        @test occursin("raw_normalization_quantile", problems(scene))
+        scene = example(); scene["track_ids"] = [1, 1, 2]
+        @test occursin("track_ids must be unique", problems(scene))
 
         @test_throws ArgumentError spacetime("scene.jld2")
         @test_throws ArgumentError spacetime(example(); output=:bogus)
@@ -336,9 +381,17 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test isfile(view.html) && endswith(view.html, ".html")
         @test startswith(basename(dirname(view.html)), "spacetime_")
 
-        # ports outside 1:65535 are rejected
+        # ports outside 1:65535 are rejected; any Integer type in range serves
         for port in (0, -1, 65536)
             @test_throws ArgumentError spacetime(scene; output=:server, port)
+        end
+        for T in (Int32, UInt16)
+            view = spacetime(scene; output=:server, port=T(rand(30000:45000)))
+            try
+                @test startswith(view.url, "http://127.0.0.1:")
+            finally
+                close(view)
+            end
         end
 
         # :server answers GET / with 200; Bonito moves on when the port is taken
@@ -402,111 +455,33 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test luminance(view.figure.scene.backgroundcolor[]) < 0.2
     end
 
-    @testset "validated scenes build (mutation test)" begin
-        # Every mutation of every key: validate_scene throws an ArgumentError, or else the
-        # scene builds and runs the self-test without throwing. Nothing else passes.
-        # A build takes about half a second: the full scene (truth, links, dimers) builds
-        # every accepted mutation; the scene without truth builds the first and the last
-        # accepted mutation of each key. Validation runs on all of them.
-        numeric(value) = value isa AbstractArray{<:Real} && !(value isa AbstractArray{Bool})
-        function poke(value, x)
-            if value isa AbstractVector && !isempty(value) && first(value) isa AbstractArray
-                copy = Vector{Any}(value)
-                copy[1] = poke(first(value), x)
-                copy
-            elseif numeric(value) && x isa Real
-                copy = float.(value)
-                copy[1] = x
-                copy
-            elseif value isa AbstractArray && !isempty(value)
-                copy = Array{Any}(value)
-                copy[1] = x
-                copy
-            else
-                x
-            end
-        end
-        function mutations(value)
-            out = Pair{String,Any}["nothing" => nothing, "string" => "bad", "float" => 1.5,
-                                   "symbol" => :bad]
-            if value isa AbstractArray
-                push!(out, "short" => selectdim(value, 1, 1:size(value, 1)-1) |> collect)
-                for (label, x) in (("nan", NaN), ("negative", -1.0), ("big", 2.0),
-                                   ("zero", 0.0), ("nothing-element", nothing),
-                                   ("string-element", "x"))
-                    push!(out, label => poke(value, x))
-                end
-            elseif value isa Real && !(value isa Bool)
-                append!(out, ["nan" => NaN, "inf" => Inf, "negative" => -1,
-                              "zero" => 0, "big" => 7])
-            elseif value isa Bool
-                push!(out, "int" => 2)
-            end
-            out
-        end
-        function paths(scene)
-            out = Vector{Vector{String}}()
-            for (key, value) in scene
-                push!(out, [key])
-                if value isa AbstractDict
-                    for subkey in keys(value)
-                        push!(out, [key, subkey])
-                    end
-                end
-            end
-            out
-        end
-        function lookup(scene, path)
-            length(path) == 1 ? scene[path[1]] : scene[path[1]][path[2]]
-        end
-        function assign!(scene, path, value)
-            container = length(path) == 1 ? scene : scene[path[1]]
-            if value === :delete
-                delete!(container, path[end])
-            else
-                container[path[end]] = value
-            end
-        end
-        accepted = 0
-        rejected = 0
+    @testset "validated scenes build (mutation sweep)" begin
+        # Every mutation of every key, in both fixtures: validate_scene throws an
+        # ArgumentError, or else the scene builds and its self-test raises nothing (the
+        # Long group builds every accepted mutation; here one per key).
         violations = String[]
-        for (base, every) in ((example(; dimers=true), true),
-                              (example(; truth=false), false))
-            for path in paths(base)
-                valid = Pair{String,Any}[]
-                candidates = Pair{String,Any}["delete" => :delete]
-                append!(candidates, mutations(lookup(base, path)))
-                for (label, mutated) in candidates
-                    scene = deepcopy(base)
-                    assign!(scene, path, mutated)
-                    name = join(path, "/") * " <- " * label
-                    try
-                        Spacetime.validate_scene(scene)
-                        push!(valid, name => scene)
-                        accepted += 1
-                    catch e
-                        if e isa ArgumentError
-                            rejected += 1
-                        else
-                            push!(violations, "$name: validate threw $(typeof(e))")
-                        end
-                    end
-                end
-                isempty(valid) && continue
-                chosen = every ? valid : unique([first(valid), last(valid)])
-                for (name, scene) in chosen
-                    try
-                        build(scene)
-                    catch e
-                        push!(violations, "$name: built with $(typeof(e)): " *
-                                          first(sprint(showerror, e), 120))
-                    end
+        accepted = Dict{String,Pair{String,Dict{String,Any}}}()
+        rejected = 0
+        for base in (example(; dimers=true), example(; truth=false))
+            for (name, scene) in mutated_scenes(base)
+                verdict = validation_outcome(scene)
+                if verdict === :rejected
+                    rejected += 1
+                elseif verdict === :accepted
+                    key = first(split(name, " <- "))
+                    haskey(accepted, key) || (accepted[key] = name => scene)
+                else
+                    push!(violations, "$name: $verdict")
                 end
             end
         end
-        @test isempty(violations)
+        for (key, (name, scene)) in accepted
+            outcome = full_outcome(scene)
+            outcome isa Tuple || push!(violations, "$name: $outcome")
+        end
         isempty(violations) || foreach(println, violations)
-        @test rejected > 300
-        @test accepted > 50
+        @test isempty(violations)
+        @test rejected > 900
+        @test length(accepted) > 20
     end
 end
