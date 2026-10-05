@@ -84,7 +84,13 @@ to the scene:
 Finiteness and ranges apply after conversion to the canonical type: a Float64 that
 underflows to Float32 zero is zero, and one that overflows to Float32 infinity is not
 finite. Every array in the converted scene is exactly its canonical `Array` type and
-one-based (an `OffsetArray`, a view or a range is copied).
+one-based (an `OffsetArray`, a view or a range is copied). The canonical `String` is valid
+UTF-8: every text key (`title`, `state_source`, `raw_render_mode`, `raw_intensity_unit`,
+`track_labels`, `track_label_prefix`, `track_id_description`, `display_name`,
+`dimer_labels`, and `schema`) is rejected otherwise, because Makie's text layout cannot draw
+it. The promise covers zooming the 2D frame to regions of at least 1e-4 of the box per axis
+(x span at least `1e-4 X`, y span at least `1e-4 Y`); a narrower zoom exceeds the Float32
+resolution WGLMakie draws in, and is a stated non-goal, like sizes.
 
 ### Required keys
 
@@ -156,10 +162,12 @@ step, `track_fine_frames` holds it and `z = (step - 0.5)/k + 0.5`).
 
 ### Traps
 
-- **Orientation.** The voxel `y` formula assumes the image row index increases with `y`
-  (row 1 covers `y in [0, pixel_size]`). Check your simulator's or tracker's image
-  orientation against a track's `y` before trusting the overlay: a single transposition makes
-  the tracks miss the blobs.
+- **Orientation.** The voxel formula draws image row 1 at the top (`y = (ny - r + 0.5) *
+  pixel_size`), and `track_y = ny * pixel_size - y_tracker` flips the tracker's `y` the same
+  way. This assumes the tracker's own `y` increases with the image row index (row 1 covers
+  `y_tracker in [0, pixel_size]`). Check your simulator's or tracker's image orientation
+  against a track's `y` before trusting the overlay: a single transposition makes the
+  tracks miss the blobs.
 - **Positions outside the field.** Positions must lie in the box grown by its own size;
   validation rejects anything farther. With the frame inspector (the default) segments are
   clipped to the ROI in x and y; z is never clipped, and without the inspector nothing is, so
