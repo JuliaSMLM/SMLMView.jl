@@ -3,9 +3,8 @@
 # has `Spacetime` (SMLMView.Spacetime) and `spacetime` in scope.
 #
 # The requirement under test: for every mutation of every key of a scene, validate_scene
-# throws an ArgumentError, or else it returns a canonical scene that builds without
-# throwing and whose self-test failures are only names of checks that returned false (a
-# failure that is an exception message means the builder threw inside the self-test).
+# throws an ArgumentError, or else it returns a canonical scene that builds and passes its
+# control self-test.
 
 const SCALAR_MUTATIONS = (
     "nan" => NaN, "inf" => Inf, "negative" => -1, "zero" => 0, "big" => 7,
@@ -209,8 +208,7 @@ function full_outcome(scene)
     catch error
         return "built with " * short_error(error)
     end
-    names = Set(string.(keys(view.health.checks)))
-    raised = [failure for failure in view.health.failures if !(failure in names)]
-    isempty(raised) || return "self-test raised: " * first(join(raised, "; "), 140)
+    view.health.passed ||
+        return "self-test failed: " * first(join(view.health.failures, "; "), 140)
     (:accepted, view)
 end

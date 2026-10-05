@@ -26,6 +26,13 @@ include("long/utils/mutations.jl")      # shared with the Long group
 build(scene; kwargs...) = spacetime(scene; output=:none, kwargs...)
 # The launcher with a stand-in Ship of Tools REPL module (or nothing).
 launch(scene, repl; kwargs...) = Spacetime._spacetime(scene, repl; kwargs...)
+# A link_alpha that is not a function of the weight (it changes after the build), so the
+# links_alpha self-test check fails. Validated scenes cannot fail their self-test; this
+# keyword is how the tests drive the failure paths.
+function unstable_alpha()
+    calls = Ref(0)
+    weight -> (calls[] += 1; calls[] <= 2 ? 0.5f0 : 0.25f0)
+end
 luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 const OffsetArrays = Makie.OffsetArrays
 problems(scene) = try
@@ -322,19 +329,20 @@ const VIEW0 = build(example())
 
     @testset "failed self-test blocks the output" begin
         scene = example()
-        scene["track_colors"][1, :] = Float32[0.5, 0.5, 0.5]    # no longer its truth colour
-        view = build(scene)
+        view = build(scene; link_alpha=unstable_alpha())
         @test !view.health.passed
-        @test :matched_trajectory_colors in Symbol.(view.health.failures)
+        @test :links_alpha in Symbol.(view.health.failures)
         @test occursin("FAILED", sprint(show, MIME("text/plain"), view))
         path = joinpath(mktempdir(), "never.html")
         err = try
-            spacetime(scene; output=:html, html=path, frame_inspector=false); nothing
+            spacetime(scene; output=:html, html=path, link_alpha=unstable_alpha(),
+                      frame_inspector=false)
+            nothing
         catch e
             e
         end
         @test err isa ErrorException
-        @test occursin("matched_trajectory_colors", err.msg)
+        @test occursin("links_alpha", err.msg)
         @test !isfile(path)
     end
 
@@ -358,6 +366,9 @@ const VIEW0 = build(example())
         # the opacity is clamped to [0, 1]
         @test Spacetime._link_alpha(w -> 5w, 0.5) == 1
         @test Spacetime._link_alpha(w -> -w, 0.5) == 0
+        err = try; Spacetime._link_alpha(w -> NaN, 0.5f0); nothing; catch e; e; end
+        @test err isa ArgumentError && occursin("link_alpha(0.5)", err.msg)
+        @test_throws ArgumentError Spacetime._link_alpha(w -> Inf, 0.5f0)
         # a negative or non-finite width is an ArgumentError: scalar, or function result
         # naming the weight (end to end once, the rest on the helper)
         @test_throws ArgumentError build(example(); link_width=-0.5)
@@ -438,8 +449,8 @@ const VIEW0 = build(example())
         old = launch(scene, StubReplOld; open=true, light...)
         @test old.url == "http://stub.invalid:2/"
         # a failing self-test never reaches wglshow
-        bad = example(); bad["track_colors"][1, :] = Float32[0.5, 0.5, 0.5]
-        @test_throws ErrorException launch(bad, StubRepl; output=:serve, light...)
+        @test_throws ErrorException launch(scene, StubRepl; output=:serve,
+                                            link_alpha=unstable_alpha(), light...)
         # no REPL: :auto picks :html, :serve is an error
         view = launch(scene, nothing; light...)
         @test !isnothing(view.html) && isnothing(view.url)
@@ -453,6 +464,136 @@ const VIEW0 = build(example())
         @test luminance(before) > 0.5                  # the session default stays light
         @test luminance(view.axis.titlecolor[]) > 0.3  # the figure is dark: light text
         @test luminance(view.figure.scene.backgroundcolor[]) < 0.2
+    end
+
+    @testset "positions within the padded box" begin
+        # box B = [0, X] x [0, Y] x [0.5, T + 0.5]; positions may lie in B grown by its size
+        scene = example()
+        X, Y = 16 * 0.1, 12 * 0.1
+        scene["links"]["x0"][2] = -1f8
+        scene["links"]["x1"][2] = 1f8
+        message = problems(scene)
+        @test occursin("links: x0", message) && occursin("links: x1", message)
+        scene = example()
+        truth = scene["ground_truth_tracks"]
+        truth["track_x"][1][1] = 3f38
+        truth["track_x"][2][1] = -3f38
+        @test occursin("ground_truth_tracks: track_x", problems(scene))
+        scene = example(; dimers=true)
+        scene["dimer_y"][1][1] = 3 * Float32(Y)
+        scene["dimer_z"][1][1] = -50f0
+        message = problems(scene)
+        @test occursin("dimer_y", message) && occursin("dimer_z", message)
+        scene = example(); scene["raw_xyz"][1, 1] = Float32(3X)
+        @test occursin("raw_xyz", problems(scene))
+        scene = example(); scene["raw_xyz"][1, 3] = -50f0
+        @test occursin("raw_xyz", problems(scene))
+
+        # a link from x = -X to 2X (just inside the Float64 bounds) draws from 0 to X
+        inside_low(v) = (f = Float32(v); Float64(f) < v ? nextfloat(f) : f)
+        inside_high(v) = (f = Float32(v); Float64(f) > v ? prevfloat(f) : f)
+        scene = example()
+        links = scene["links"]
+        links["x0"][2], links["x1"][2] = inside_low(-X), inside_high(2X)
+        links["y0"][2] = links["y1"][2] = Float32(Y / 2)
+        view = build(scene)
+        @test view.health.passed
+        drawn = view.controls.links_plot[1][]
+        x0, x1 = Float64(links["x0"][2]), Float64(links["x1"][2])
+        z0, z1 = Float64(links["z0"][2]), Float64(links["z1"][2])
+        at(x) = (x, Float64(links["y0"][2]), z0 + (x - x0) / (x1 - x0) * (z1 - z0))
+        for (point, x) in zip(drawn[1:2], (0.0, X))
+            @test all(abs.(Float64.(point) .- collect(at(x))) .<= 1e-6 * X)
+        end
+    end
+
+    @testset "clip helper against Float64" begin
+        # an independent Float64 Liang-Barsky, compared on random segments in the padded
+        # box against ROIs inside the box (no builds)
+        function reference(a, b, roi)
+            d = b .- a
+            t0, t1 = 0.0, 1.0
+            for (p, q) in ((-d[1], a[1] - roi[1]), (d[1], roi[2] - a[1]),
+                           (-d[2], a[2] - roi[3]), (d[2], roi[4] - a[2]))
+                if p == 0
+                    q < 0 && return nothing
+                else
+                    r = q / p
+                    p < 0 ? (t0 = max(t0, r)) : (t1 = min(t1, r))
+                    t0 <= t1 || return nothing
+                end
+            end
+            (a .+ t0 .* d, a .+ t1 .* d)
+        end
+        # a seeded 64-bit LCG (uniform in [0, 1)), so the test needs no extra dependency
+        state = Ref(UInt64(20261004))
+        uniform() = (state[] = state[] * 6364136223846793005 + 1442695040888963407;
+                     Float64(state[] >> 11) / 2^53)
+        worst = 0.0
+        problems_found = String[]
+        for _ in 1:10^4
+            X, Y = 10.0^(floor(Int, 7uniform()) - 3), 10.0^(floor(Int, 7uniform()) - 3)
+            T = 100
+            point() = Float32.((X * (3uniform() - 1), Y * (3uniform() - 1),
+                                0.5 - T + 3T * uniform()))
+            a, b = Point3f(point()...), Point3f(point()...)
+            width, height = X * 10.0^(-3uniform()), Y * 10.0^(-3uniform())
+            x_low, y_low = (X - width) * uniform(), (Y - height) * uniform()
+            roi = Float32.((x_low, x_low + width, y_low, y_low + height))
+            helper = Spacetime._clip_spacetime_segment(a, b, roi)
+            expected = reference(Float64.(a), Float64.(b), Float64.(roi))
+            extents = (X, Y, Float64(T))
+            relative(u, v) = maximum(abs.(Float64.(u) .- v) ./ extents)
+            if !isnothing(helper) && any(!isfinite, vcat(Float64.(helper[1]),
+                                                         Float64.(helper[2])))
+                push!(problems_found, "NaN or Inf endpoint")
+            elseif isnothing(helper) != isnothing(expected)
+                kept = isnothing(helper) ? expected : helper
+                length_kept = relative(kept[2], Float64.(kept[1]))
+                length_kept <= 1e-5 ||
+                    push!(problems_found, "clipped away or kept: length $length_kept")
+            elseif !isnothing(helper)
+                error_ = max(relative(helper[1], expected[1]),
+                             relative(helper[2], expected[2]))
+                worst = max(worst, error_)
+                error_ <= 1e-5 || push!(problems_found, "endpoint error $error_")
+            end
+        end
+        @test isempty(problems_found)
+        @test worst <= 1e-5
+    end
+
+    @testset "frame bounds" begin
+        # T = 10: sub_steps * T <= 10^6, fine frames in [1 - kT, 2kT]
+        scene = example(); scene["sub_steps"] = 10^5
+        @test Spacetime.validate_scene(scene) isa Dict
+        scene["sub_steps"] = 10^5 + 1
+        @test occursin("sub_steps", problems(scene))
+        scene["sub_steps"] = typemax(Int)
+        @test occursin("sub_steps", problems(scene))     # the product overflows
+        scene = example(); scene["track_fine_frames"][1][1] = typemin(Int)
+        @test occursin("track_fine_frames", problems(scene))
+        scene = example(; dimers=true); scene["dimer_fine_frames"][1][1] = typemin(Int)
+        @test occursin("dimer_fine_frames", problems(scene))
+        scene = example()
+        for (frame, ok) in ((-9, true), (20, true), (-10, false), (21, false))
+            scene["track_fine_frames"][1][1] = frame
+            @test (problems(scene) == "") == ok
+        end
+    end
+
+    @testset "colour rules" begin
+        scene = example()                               # found 1 matches truth 101
+        scene["track_colors"][1, :] = Float32[0.5, 0.5, 0.5]
+        message = problems(scene)
+        @test occursin("trajectory_color_matches", message)
+        @test occursin("same track_colors row", message)
+        scene = example()                               # a duplicate found colour
+        scene["track_colors"][3, :] = scene["track_colors"][2, :]
+        @test occursin("track_colors", problems(scene))
+        scene = example(; truth=false)                  # no matches: duplicates are fine
+        scene["track_colors"][3, :] = scene["track_colors"][2, :]
+        @test problems(scene) == ""
     end
 
     @testset "schema problems are collected with the others" begin
