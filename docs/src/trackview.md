@@ -269,7 +269,7 @@ self-test runs first (a failed check throws before anything is served or written
 | `output` | result |
 |---|---|
 | `:auto` | `:serve` when `Main.ShipToolsRepl` is defined, else `:html` |
-| `:serve` | `Main.ShipToolsRepl.wglshow(figure; open)`; `open=false` by default, then target one frontend with `sot-fe open-url <url> --fe <handle>` |
+| `:serve` | `Main.ShipToolsRepl.wglshow(figure; open)`; with `open=false` (the default) it is served and shown nowhere until a frontend opens `view.url`, see [Seeing a served view](@ref) |
 | `:server` | a Bonito server on `127.0.0.1:port` (`port` in 1:65535; the next free port when it is taken, and `view.url` names the port used), for a standalone script; prints the URL; `wait(view)` keeps the process serving, `close(view)` stops it |
 | `:html` | standalone HTML at `html`; by default `trackview.html` in a fresh `trackview_*` folder under the temp directory, which persists after Julia exits |
 | `:none` | build and self-test only; the returned `TrackView` carries `health` |
@@ -277,6 +277,23 @@ self-test runs first (a failed check throws before anything is served or written
 ```julia
 view = trackview(scene; output=:server, port=9384)   # in a script
 wait(view)
+```
+
+### Seeing a served view
+
+In a Ship of Tools REPL, `trackview(scene)` serves the figure (`output=:serve`). With the
+default `open=false` it is shown nowhere: the view exists at `view.url` (also printed), but
+nothing appears on any frontend until one opens that URL. There are two ways to see it:
+
+- `trackview(scene; open=true)` opens it on the attached frontend. Use it only when exactly
+  one frontend is attached: two browser clients on one figure corrupt its layout.
+- Keep `open=false` and open the URL on one chosen frontend from a shell:
+  `sot-fe open-url <url> --fe <handle>`.
+
+```julia
+view = trackview(scene)                # served; nothing appears yet
+view.url                               # then: sot-fe open-url <url> --fe <handle>
+view = trackview(scene; open=true)     # shown on the one attached frontend
 ```
 
 The result is a [`TrackView`](@ref). Its stable fields are `figure`, `axis`, `health` (the
