@@ -52,6 +52,7 @@ function _describe(spec::KeySpec)
     floats = Union{AbstractFloat,AbstractArray{<:AbstractFloat},
                    AbstractArray{<:AbstractArray{<:AbstractFloat}}}
     spec.type <: floats && (text *= " with finite values")
+    spec.type <: Union{String,Vector{String}} && (text *= " (valid UTF-8)")
     spec.positive && (text *= " > 0")
     isfinite(spec.lo) && isfinite(spec.hi) && (text *= " in [$(spec.lo), $(spec.hi)]")
     isfinite(spec.lo) && !isfinite(spec.hi) && (text *= " >= $(spec.lo)")
@@ -183,6 +184,7 @@ function _read!(problems, out, dict, spec::KeySpec, prefix)
         return nothing
     end
     function in_range(x)
+        x isa AbstractString && return isvalid(x)
         x isa AbstractFloat && !isfinite(x) && return false
         x isa Real || return true
         spec.lo <= x <= spec.hi && (!spec.positive || x > 0)
