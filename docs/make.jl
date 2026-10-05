@@ -15,6 +15,7 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Examples" => "examples.md",
+        "Track viewer" => "trackview.md",
         "API Reference" => "api.md",
     ],
     warnonly=[:missing_docs],  # Allow internal functions to have docstrings without being in manual

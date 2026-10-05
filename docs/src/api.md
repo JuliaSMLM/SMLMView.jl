@@ -15,6 +15,15 @@ smlmview
 configure_display!
 ```
 
+## Track viewer
+
+See [Track viewer](trackview.md) for the scene schema and output routes.
+
+```@docs
+trackview
+TrackView
+```
+
 ## Keybinding Functions
 
 ```@docs

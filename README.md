@@ -30,6 +30,19 @@ ch1, ch2, ch3 = rand(256,256,10), rand(256,256,10), rand(256,256,10)
 smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 ```
 
+## Track viewer
+
+`trackview` shows a tracking result as one interactive 3D scene (x, y, frame) of raw voxels and
+trajectories, with a linked 2D frame inspector, ground-truth switch and link-probability layer.
+The input is a plain scene `Dict` (schema `"trackview/1"`, see the documentation page):
+
+```julia
+using SMLMView
+scene = SMLMView.TrackViewer.example_scene()    # a small hand-written scene
+view = trackview(scene)                         # Ship of Tools REPL: served; else standalone HTML
+view = trackview(scene; output=:html, html="scene.html")
+```
+
 ## Features
 
 - N-dimensional array viewing with slice navigation (`j`/`l` keys)
@@ -38,6 +51,7 @@ smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 - Global or per-slice contrast stretch
 - Configurable keybindings via Preferences.jl
 - Web-deployable via WGLMakie/Bonito
+- Track viewer for tracking results (`trackview`)
 
 ## Keyboard Shortcuts
 

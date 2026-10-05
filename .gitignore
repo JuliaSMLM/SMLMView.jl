@@ -6,3 +6,4 @@
 /docs/build/
 /examples/Manifest*.toml
 LocalPreferences.toml
+/dev/
