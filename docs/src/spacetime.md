@@ -67,6 +67,10 @@ Ranges, besides "floating-point values are finite": `pixel_size` in [1e-4, 1e3] 
 link weights `w`, `raw_quantile` and `raw_normalization_quantile` in [0, 1]; `nx`, `ny`,
 `sub_steps` at least 1; ids, frames and counts representable as `Int`; `track_ids` unique
 within a set; `raw_alpha_min` and `raw_alpha_max` in [0, 1] and `raw_alpha_gamma` > 0.
+Finiteness and ranges apply after conversion to the canonical type: a Float64 that
+underflows to Float32 zero is zero, and one that overflows to Float32 infinity is not
+finite. Every array in the converted scene is exactly its canonical `Array` type and
+one-based (an `OffsetArray`, a view or a range is copied).
 
 ### Required keys
 
@@ -86,9 +90,10 @@ within a set; `raw_alpha_min` and `raw_alpha_max` in [0, 1] and `raw_alpha_gamma
 `T = length(source_frames)`. How the raw voxels are described in the legend depends on the
 optional `raw_render_mode`:
 
-- `"all_voxels"` needs `raw_normalization_quantile` (`Float64`, for example `0.999`) and
-  `raw_normalization_high` (`Float64`, the intensity at that quantile);
-- anything else, and the default `"thresholded"`, needs `raw_threshold` and `raw_quantile`.
+- `"all_voxels"` needs `raw_normalization_quantile` (`Float64` in [0, 1], for example
+  `0.999`) and `raw_normalization_high` (`Float64`, the intensity at that quantile);
+- anything else, and the default `"thresholded"`, needs `raw_threshold` (`Float64`, the
+  intensity threshold) and `raw_quantile` (`Float64` in [0, 1], the quantile it cuts at).
 
 ### Optional keys
 
@@ -96,6 +101,7 @@ optional `raw_render_mode`:
 |---|---|---|
 | `schema` | `String` | `"spacetime/1"`, see the declaration rule |
 | `title` | `String` | 3D axis title (default `"Raw intensity and trajectories"`) |
+| `raw_render_mode` | `String` | `"all_voxels"` or `"thresholded"` (the default), see above |
 | `track_ids` | `Vector{Int}` | id of each track, one per track (default `1:n_tracks`; the default is used everywhere, including `trajectory_color_matches`) |
 | `track_labels` | `Vector{String}` | label of each track (default prefix + index) |
 | `track_label_prefix` | `String` | label prefix, default `"T"` |
@@ -103,11 +109,16 @@ optional `raw_render_mode`:
 | `display_name` | `String` | name of this track set in titles and the legend (default `"found"`, `"ground truth"`) |
 | `matched_other_ids` | `Vector{Int}`, one per track | per track, the id of its match in the other set, `0` for none |
 | `raw_intensity_unit` | `String` | unit in the legend, default `"photons"` |
-| `raw_alpha_min`, `raw_alpha_max`, `raw_alpha_gamma` | `Float` | voxel opacity range, each in `[0, 1]`, and gamma `> 0` (defaults `0.0005`, `0.06`, `1.15`) |
-| `ground_truth_tracks` | `Dict` | a second track set, see below |
-| `trajectory_color_matches`, `trajectory_color_match_gate` | see below | shared colors for matched tracks |
-| `links` | `Dict` | link probabilities, see below |
-| `dimer_*` | see below | dimer episodes |
+| `raw_alpha_min`, `raw_alpha_max` | `Float32` | voxel opacity range, each in `[0, 1]` (defaults `0.0005`, `0.06`) |
+| `raw_alpha_gamma` | `Float32` | voxel opacity gamma, `> 0` (default `1.15`) |
+| `ground_truth_tracks` | `Dict{String,Any}` | a second track set, see below |
+| `trajectory_color_matches` | `Vector{@NamedTuple{truth_id::Int, estimate_id::Int}}` | shared colors for matched tracks, see below |
+| `trajectory_color_match_gate` | `Float64` | matching gate in μm; required with `trajectory_color_matches` |
+| `links` | `Dict{String,Any}` | link probabilities, see below |
+| `dimer_x`, `dimer_y`, `dimer_z` | `Vector{Vector{Float32}}` | dimer episodes, see below |
+| `dimer_fine_frames` | `Vector{Vector{Int}}` | dimer episodes, see below |
+| `dimer_labels` | `Vector{String}` | dimer episodes, see below |
+| `dimer_track_indices`, `dimer_track_ids` | `Matrix{Int}` | `n_episodes x 2`, dimer episodes, see below |
 
 ### Coordinate conventions
 
@@ -149,8 +160,9 @@ switch. The scene itself is the found set.
 
 ### Color matches
 
-`trajectory_color_matches` is a vector of named tuples with at least `truth_id` and
-`estimate_id`, together with `trajectory_color_match_gate` (the matching gate in μm, shown in
+`trajectory_color_matches` is a vector of objects with integer `truth_id` and `estimate_id`
+fields (named tuples; extra fields are dropped), together with
+`trajectory_color_match_gate` (`Float64`, the matching gate in μm, shown in
 the label). It requires `ground_truth_tracks`; `truth_id` is a `ground_truth_tracks` track id
 and `estimate_id` a found track id. Matched tracks must carry the same color in both sets.
 
@@ -176,7 +188,7 @@ Optional dimer episodes, drawn as a gold path with a label. A set that has any `
 needs `dimer_x`, `dimer_y`, `dimer_z` (`Vector{Vector{Float32}}`, one non-empty vector per
 episode, same convention as tracks), `dimer_fine_frames` (`Vector{Vector{Int}}`) and
 `dimer_labels` (`Vector{String}`), aligned per episode. When there is at least one episode,
-`dimer_track_indices` and `dimer_track_ids` (`n_episodes x 2` integer matrices) are required
+`dimer_track_indices` and `dimer_track_ids` (`n_episodes x 2` `Matrix{Int}`) are required
 too. Dimers may be given for the found set and inside `ground_truth_tracks`. The legend names
 dimers only when the scene has `dimer_*` keys.
 
@@ -185,8 +197,9 @@ dimers only when the scene has `dimer_*` keys.
 A scene declares its schema with `"schema" => "spacetime/1"`. A scene without the key is read
 as `"spacetime/1"`, with one `@info` per session suggesting the exporter add the key. The
 absence of the key is the only fallback: a key that is present must be a string equal to a
-supported version, so `nothing`, a `Symbol` or another version throws an `ArgumentError`
-naming the supported versions. A new version of the schema will get a new number;
+supported version, so `nothing`, a `Symbol` or another version is an error naming the
+supported versions; `validate_scene` lists it together with any other problems in its one
+`ArgumentError`. A new version of the schema will get a new number;
 `"spacetime/1"` scenes keep working.
 
 [`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, every key the viewer
