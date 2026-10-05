@@ -50,8 +50,8 @@ view = spacetime(SMLMView.Spacetime.example_scene(); output=:html)
 
 Each key below has a canonical type (the type in its row) and a range. The viewer promises:
 
-- A scene that matches the canonical types and ranges builds and runs its control
-  self-test without throwing.
+- A scene that matches the canonical types and ranges builds and passes its control
+  self-test.
 - `validate_scene` rejects, with one `ArgumentError` naming each offending key, any scene it
   cannot convert into those types and ranges.
 - Values are converted, not just checked: for example Float64 positions become Float32,
@@ -62,11 +62,24 @@ Each key below has a canonical type (the type in its row) and a range. The viewe
 - A builder error after validation is a bug, not something the viewer reports as a
   scene error.
 
-Ranges, besides "floating-point values are finite": `pixel_size` in [1e-4, 1e3] μm (and
-`nx*pixel_size`, `ny*pixel_size` usable as Float32 extents); intensities, track colors,
-link weights `w`, `raw_quantile` and `raw_normalization_quantile` in [0, 1]; `nx`, `ny`,
-`sub_steps` at least 1; ids, frames and counts representable as `Int`; `track_ids` unique
-within a set; `raw_alpha_min` and `raw_alpha_max` in [0, 1] and `raw_alpha_gamma` > 0.
+Ranges, besides "floating-point values are finite": `pixel_size` in [1e-4, 1e3] μm;
+intensities, track colors, link weights `w`, `raw_quantile` and
+`raw_normalization_quantile` in [0, 1]; `nx`, `ny`, `sub_steps` at least 1; ids, frames and
+counts representable as `Int`; `track_ids` unique within a set; `raw_alpha_min` and
+`raw_alpha_max` in [0, 1] and `raw_alpha_gamma` > 0. Three further rules tie the numbers
+to the scene:
+
+- **Positions (rule P).** The scene's box is `[0, X] x [0, Y] x [0.5, T + 0.5]` with
+  `X = nx*pixel_size`, `Y = ny*pixel_size` and `T = length(source_frames)`. Every position
+  must lie in the box grown by its own size: x in `[-X, 2X]`, y in `[-Y, 2Y]`, z in
+  `[0.5 - T, 2T + 0.5]`. This covers `track_x/y/z` and `dimer_x/y/z` in both track sets, the
+  link ends `x0` to `z1`, and the three columns of `raw_xyz`.
+- **Frames (rule F).** `sub_steps * T` is at most 10^6, and every `track_fine_frames` and
+  `dimer_fine_frames` value (both sets) lies in `[1 - kT, 2kT]` with `k = sub_steps`.
+- **Colors (rule C).** With `trajectory_color_matches` present, a matched found track has
+  exactly the `track_colors` row of its truth track, and the found `track_colors` rows are
+  unique. (The control self-test checks the same two things.)
+
 Finiteness and ranges apply after conversion to the canonical type: a Float64 that
 underflows to Float32 zero is zero, and one that overflows to Float32 infinity is not
 finite. Every array in the converted scene is exactly its canonical `Array` type and
@@ -146,11 +159,16 @@ step, `track_fine_frames` holds it and `z = (step - 0.5)/k + 0.5`).
   (row 1 covers `y in [0, pixel_size]`). Check your simulator's or tracker's image
   orientation against a track's `y` before trusting the overlay: a single transposition makes
   the tracks miss the blobs.
-- **Positions outside the field.** Drop them in the exporter, or accept that the viewer clips
-  segments at the box edge.
-- **Colors.** With `trajectory_color_matches`, every matched found row must have exactly the
-  color of its truth row, and found colors must be unique. The control self-test checks this,
-  and `spacetime` throws before serving or exporting if it fails.
+- **Positions outside the field.** Positions must lie in the box grown by its own size;
+  validation rejects anything farther. With the frame inspector (the default) segments are
+  clipped to the ROI in x and y; z is never clipped, and without the inspector nothing is, so
+  a position outside the box is drawn outside it. Drop such positions in the exporter.
+- **Conventions are not checked.** `validate_scene` checks types, ranges, shapes, alignment,
+  ids and the color rules, not conventions: the voxel formula, `track_z` against the fine
+  frames, ids across the two sets (`matched_other_ids`), the dimer track pairs and the frame
+  order along a track. A scene that breaks a convention is drawn as given.
+- **Sizes are unbounded.** The number of voxels, tracks, links and the length of strings are
+  not limited by the schema (a stated non-goal); memory and the browser bound them.
 - **Size.** The standalone HTML grows with the voxel count: about 27 MB for 64x64x100 and
   63 MB for 96x96x120. The browser draws every voxel as a translucent cube.
 - **One client.** Two browser clients on one live figure corrupt Makie's shared layout; see
@@ -209,8 +227,8 @@ supported versions; `validate_scene` lists it together with any other problems i
 
 [`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, every key the viewer
 reads with its type, shape and range, and the optional parts before anything is built, and
-throws one `ArgumentError` listing every problem. A scene it accepts builds and runs the
-control self-test without throwing. `spacetime` calls it first.
+throws one `ArgumentError` listing every problem. A scene it accepts builds and passes the
+control self-test. `spacetime` calls it first.
 
 The public, non-exported names of the `SMLMView.Spacetime` module are `example_scene`,
 `validate_scene` and `scene_schema`; they are declared `public` on Julia 1.11 and later.
@@ -227,7 +245,8 @@ spacetime(scene; link_alpha = sqrt)
 spacetime(scene; link_alpha = _ -> 1, link_width = w -> 0.5 + 3w)   # width carries w
 ```
 
-`link_alpha` is a function of `w`, its result clamped to `[0, 1]`. `link_width` is a number or
+`link_alpha` is a function of `w`, its result clamped to `[0, 1]` (a non-finite result is an
+`ArgumentError` naming the weight). `link_width` is a number or
 a function of `w` giving a per-segment width; a negative or non-finite width throws an
 `ArgumentError` (for the function form it names the weight). The control self-test checks the
 drawn colors (`links_alpha`) and widths (`links_width`) against the chosen mapping.
