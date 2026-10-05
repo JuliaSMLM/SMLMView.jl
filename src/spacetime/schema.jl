@@ -203,9 +203,40 @@ function _pass_through!(out, dict, specs, known)
     out
 end
 
+# Position and frame rules. The box is B = [0, X] x [0, Y] x [0.5, T + 0.5], the axis
+# limits the builder sets, with X = nx*pixel_size, Y = ny*pixel_size and T the number of
+# frames. Every position must lie in B grown by its own size (x in [-X, 2X], y in
+# [-Y, 2Y], z in [0.5 - T, 2T + 0.5]); every fine frame in [1 - kT, 2kT] with
+# kT = sub_steps*T <= FRAME_LIMIT. Values are checked after conversion, against Float64
+# bounds, inclusive. `box` is nothing, or (; X, Y, T, frames) with frames nothing when
+# sub_steps*T is out of bounds (reported once, in _check_scene!).
+const FRAME_LIMIT = 10^6
+
+function _position_bounds(box, axis)
+    axis == 1 ? (-box.X, 2box.X) :
+    axis == 2 ? (-box.Y, 2box.Y) :
+    (0.5 - box.T, 2box.T + 0.5)
+end
+
+function _check_positions!(problems, box, prefix, key, value, axis)
+    (isnothing(box) || isnothing(value)) && return nothing
+    low, high = _position_bounds(box, axis)
+    _all_elements(x -> low <= x <= high, value) || push!(problems, prefix *
+        "$key must lie within [$low, $high] (the box grown by its own size)")
+    nothing
+end
+
+function _check_frames!(problems, box, prefix, key, value)
+    (isnothing(box) || isnothing(box.frames) || isnothing(value)) && return nothing
+    low, high = 1 - box.frames, 2 * box.frames
+    _all_elements(x -> low <= x <= high, value) || push!(problems, prefix *
+        "$key must lie within [$low, $high] (the fine frames grown by their own size)")
+    nothing
+end
+
 # Reads a track set (the scene itself, or ground_truth_tracks) into a canonical copy.
 # Returns (canonical, n_tracks), with n_tracks nothing when the arrays are not usable.
-function _check_track_set!(problems, track_scene, prefix; passthrough=true)
+function _check_track_set!(problems, track_scene, prefix; passthrough=true, box=nothing)
     out = Dict{String,Any}()
     for spec in TRACK_SPECS
         _read!(problems, out, track_scene, spec, prefix)
@@ -245,7 +276,12 @@ function _check_track_set!(problems, track_scene, prefix; passthrough=true)
     ids = get(out, "track_ids", nothing)
     isnothing(ids) || allunique(ids) ||
         push!(problems, prefix * "track_ids must be unique within a set")
-    _check_dimers!(problems, out, track_scene, prefix)
+    for (axis, key) in enumerate(("track_x", "track_y", "track_z"))
+        _check_positions!(problems, box, prefix, key, get(out, key, nothing), axis)
+    end
+    _check_frames!(problems, box, prefix, "track_fine_frames",
+        get(out, "track_fine_frames", nothing))
+    _check_dimers!(problems, out, track_scene, prefix, box)
     passthrough &&
         _pass_through!(out, track_scene, vcat(TRACK_SPECS, DIMER_SPECS), ())
     (out, n_tracks)
@@ -254,11 +290,16 @@ end
 # Dimer episodes of a track set: all five path keys together, aligned per episode; the
 # two track pair matrices are required once there is an episode. Converted values go
 # into `out`.
-function _check_dimers!(problems, out, track_scene, prefix)
+function _check_dimers!(problems, out, track_scene, prefix, box)
     any(startswith("dimer_"), keys(track_scene)) || return nothing
     for spec in DIMER_SPECS
         _read!(problems, out, track_scene, spec, prefix)
     end
+    for (axis, key) in enumerate(("dimer_x", "dimer_y", "dimer_z"))
+        _check_positions!(problems, box, prefix, key, get(out, key, nothing), axis)
+    end
+    _check_frames!(problems, box, prefix, "dimer_fine_frames",
+        get(out, "dimer_fine_frames", nothing))
     arrays = [get(out, key, nothing) for key in
               ("dimer_x", "dimer_y", "dimer_z", "dimer_fine_frames", "dimer_labels")]
     any(isnothing, arrays) && return nothing
@@ -302,14 +343,6 @@ function _check_scene!(problems, scene)
         push!(problems, "source_frames must be a non-empty Vector{Int}")
     nx, ny = get(out, "nx", nothing), get(out, "ny", nothing)
     pixel_size = get(out, "pixel_size", nothing)
-    if !isnothing(nx) && !isnothing(ny) && !isnothing(pixel_size)
-        # The builder's extents, as Float32, must be finite and positive.
-        for (name, count) in (("nx", nx), ("ny", ny))
-            extent = Float32(count * pixel_size)
-            isfinite(extent) && extent > 0 || push!(problems,
-                "$name * pixel_size = $(count * pixel_size) um is not a usable extent")
-        end
-    end
 
     n_frames = isnothing(source_frames) ? nothing : length(source_frames)
     n_voxels = try
@@ -320,10 +353,31 @@ function _check_scene!(problems, scene)
         push!(problems, "nx*ny*length(source_frames) overflows")
         nothing
     end
+    box = nothing
+    if !isnothing(nx) && !isnothing(ny) && !isnothing(pixel_size) && !isnothing(n_frames)
+        frames = try
+            total = Base.checked_mul(get(out, "sub_steps", 1), n_frames)
+            total <= FRAME_LIMIT || push!(problems,
+                "sub_steps * length(source_frames) = $total must be at most $FRAME_LIMIT")
+            total <= FRAME_LIMIT ? total : nothing
+        catch error
+            error isa OverflowError || rethrow()
+            push!(problems, "sub_steps * length(source_frames) overflows (at most " *
+                            "$FRAME_LIMIT)")
+            nothing
+        end
+        box = (; X=nx * pixel_size, Y=ny * pixel_size, T=n_frames, frames)
+    end
     raw_xyz = get(out, "raw_xyz", nothing)
     if !isnothing(raw_xyz)
         size(raw_xyz, 2) == 3 || push!(problems,
             "raw_xyz must have 3 columns, got $(size(raw_xyz, 2))")
+        if size(raw_xyz, 2) == 3
+            for axis in 1:3
+                _check_positions!(problems, box, "", "raw_xyz column $axis",
+                    view(raw_xyz, :, axis), axis)
+            end
+        end
         isnothing(n_voxels) || size(raw_xyz, 1) == n_voxels || push!(problems,
             "raw_xyz has $(size(raw_xyz, 1)) rows; " *
             "nx*ny*length(source_frames) = $n_voxels")
@@ -336,7 +390,7 @@ function _check_scene!(problems, scene)
             "(one value per raw_xyz row)")
     end
 
-    found, n_found = _check_track_set!(problems, scene, ""; passthrough=false)
+    found, n_found = _check_track_set!(problems, scene, ""; passthrough=false, box)
     merge!(out, found)
     found_ids = _checked_ids(n_found, found)
     truth_ids = nothing
@@ -344,7 +398,7 @@ function _check_scene!(problems, scene)
         truth = scene["ground_truth_tracks"]
         if truth isa AbstractDict
             canonical, n_truth = _check_track_set!(
-                problems, truth, "ground_truth_tracks: ")
+                problems, truth, "ground_truth_tracks: "; box)
             out["ground_truth_tracks"] = canonical
             truth_ids = _checked_ids(n_truth, canonical)
         else
@@ -357,6 +411,10 @@ function _check_scene!(problems, scene)
             "trajectory_color_matches needs ground_truth_tracks")
         out["trajectory_color_matches"] = _check_matches!(
             problems, scene["trajectory_color_matches"], found_ids, truth_ids)
+        truth_set = get(out, "ground_truth_tracks", nothing)
+        isnothing(truth_set) || _check_match_colours!(
+            problems, out["trajectory_color_matches"], out, found_ids, truth_set,
+            truth_ids)
     end
 
     if haskey(scene, "links")
@@ -365,6 +423,13 @@ function _check_scene!(problems, scene)
             canonical = Dict{String,Any}()
             for spec in LINK_SPECS
                 _read!(problems, canonical, links, spec, "links: ")
+            end
+            for (axis, (first_key, second_key)) in enumerate((("x0", "x1"), ("y0", "y1"),
+                                                              ("z0", "z1")))
+                for key in (first_key, second_key)
+                    _check_positions!(problems, box, "links: ", key,
+                        get(canonical, key, nothing), axis)
+                end
             end
             lengths = unique(length(value) for (_, value) in canonical)
             length(lengths) <= 1 || push!(problems,
@@ -377,6 +442,33 @@ function _check_scene!(problems, scene)
     known = ("schema", "ground_truth_tracks", "links", "trajectory_color_matches")
     _pass_through!(out, scene, vcat(SCENE_SPECS, TRACK_SPECS, DIMER_SPECS), known)
     out
+end
+
+# Colour rules, when matches are present: a matched found track has exactly the colour
+# of its ground-truth track, and the found colours are unique.
+function _check_match_colours!(problems, matches, found, found_ids, truth, truth_ids)
+    colors = get(found, "track_colors", nothing)
+    truth_colors = get(truth, "track_colors", nothing)
+    (isnothing(colors) || isnothing(truth_colors) || isnothing(found_ids) ||
+        isnothing(truth_ids)) && return nothing
+    (size(colors, 1) == length(found_ids) && size(truth_colors, 1) == length(truth_ids) &&
+        size(colors, 2) == 3 && size(truth_colors, 2) == 3) || return nothing
+    differing = String[]
+    for match in matches
+        found_row = findfirst(==(match.estimate_id), found_ids)
+        truth_row = findfirst(==(match.truth_id), truth_ids)
+        (isnothing(found_row) || isnothing(truth_row)) && continue
+        colors[found_row, :] == truth_colors[truth_row, :] || push!(differing,
+            "estimate_id $(match.estimate_id) and truth_id $(match.truth_id)")
+    end
+    isempty(differing) || push!(problems,
+        "trajectory_color_matches: matched tracks must have the same track_colors row " *
+        "(differing: " * join(first(differing, 5), "; ") *
+        (length(differing) > 5 ? "; and $(length(differing) - 5) more" : "") * ")")
+    rows = [Tuple(colors[row, :]) for row in axes(colors, 1)]
+    allunique(rows) || push!(problems,
+        "track_colors rows must be unique when trajectory_color_matches is present")
+    nothing
 end
 
 # Colour matches: a vector of objects with Integer `truth_id` and `estimate_id`, converted
@@ -421,7 +513,10 @@ Every key the viewer reads is converted to its canonical type (for example `Int`
 `Float32`, `Vector{Vector{Float32}}`, `Matrix{Float32}`, `String`) and checked for
 finite values, range and alignment: `pixel_size` in [1e-4, 1e3] μm, intensities,
 colours, link weights and quantiles in [0, 1], unique `track_ids` per set, track
-arrays of equal lengths, and the optional parts present (`ground_truth_tracks`,
+arrays of equal lengths, every position in the scene's box grown by its own size,
+`sub_steps * length(source_frames) <= 10^6` with every fine frame in `[1 - kT, 2kT]`,
+matched and unique track colours when `trajectory_color_matches` is present, and the
+optional parts present (`ground_truth_tracks`,
 `trajectory_color_matches`, `links`, `dimer_*`). Ranges and finiteness apply after
 conversion to the canonical type. Throws one `ArgumentError` naming every offending
 key, including an unsupported `"schema"` value. The returned `Dict` is new (nested

@@ -108,7 +108,8 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
     the self-test fails, for tests and callers that serve the figure themselves.
 - `open`: open a browser tab from `:serve` (default `false`).
 - `link_alpha`: function of a link weight `w` giving its opacity (clamped to
-  [0, 1]); default `identity`, so opacity is exactly `w`. A floor is
+  [0, 1]; a non-finite result throws an `ArgumentError` naming the weight); default
+  `identity`, so opacity is exactly `w`. A floor is
   `w -> max(w, 0.15)`; others are `sqrt` or `_ -> 1`.
 - `link_width`: a line width, or a function of `w` giving a per-segment width,
   for example `w -> 0.5 + 3w`. A negative or non-finite width, scalar or from the

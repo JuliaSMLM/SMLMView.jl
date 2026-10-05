@@ -1,9 +1,13 @@
 # The 3D figure: Axis3 with voxel, track, link and dimer layers, legend, view
 # controls, the root event router and the control self-test.
 
-# Link opacity: the mapping of the link weight, clamped to [0, 1].
+# Link opacity: the mapping of the link weight, clamped to [0, 1]. A non-finite result is
+# an ArgumentError naming the weight, as for the width.
 function _link_alpha(mapping, weight)
-    clamp(Float32(mapping(Float32(weight))), 0.0f0, 1.0f0)
+    alpha = Float32(mapping(Float32(weight)))
+    isfinite(alpha) || throw(ArgumentError(
+        "link_alpha($weight) = $alpha must be finite"))
+    clamp(alpha, 0.0f0, 1.0f0)
 end
 
 # Width of one link segment. A number is the width itself; a function maps the link
