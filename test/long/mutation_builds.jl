@@ -1,8 +1,8 @@
 using Test
 using SMLMView
-using SMLMView: Spacetime
+using SMLMView: TrackViewer
 
-example(; kwargs...) = Spacetime.example_scene(; kwargs...)
+example(; kwargs...) = TrackViewer.example_scene(; kwargs...)
 include("utils/mutations.jl")
 
 @testset "every accepted mutation builds" begin

@@ -1,7 +1,7 @@
 # Geometry helpers: track paths, segment clipping, fixed-length padded buffers,
 # frame-slab edges, layout hit tests and ROI bounds.
 
-function _spacetime_paths(xs, ys, zs, fine_frames)
+function _track_paths(xs, ys, zs, fine_frames)
     continuous = Point3f[]
     gaps = Point3f[]
     separator = Point3f(NaN32, NaN32, NaN32)
@@ -23,7 +23,7 @@ function _spacetime_paths(xs, ys, zs, fine_frames)
     continuous, gaps
 end
 
-function _clip_spacetime_segment(first_point, second_point, bounds)
+function _clip_segment(first_point, second_point, bounds)
     all(isfinite, first_point) && all(isfinite, second_point) || return nothing
 
     x_lower, x_upper, y_lower, y_upper = bounds
@@ -66,7 +66,7 @@ function _clip_spacetime_segment(first_point, second_point, bounds)
     )
 end
 
-function _spacetime_line_segments(points, bounds=nothing)
+function _line_segments(points, bounds=nothing)
     # WGLMakie may compact NaN vertices while leaving a separately uploaded
     # per-vertex color buffer unchanged. A finite, degenerate off-screen pair
     # keeps geometry and colors index-aligned through ROI updates.
@@ -79,7 +79,7 @@ function _spacetime_line_segments(points, bounds=nothing)
             all(isfinite, first_point) && all(isfinite, second_point) ?
                 (first_point, second_point) : nothing
         else
-            _clip_spacetime_segment(first_point, second_point, bounds)
+            _clip_segment(first_point, second_point, bounds)
         end
         isnothing(clipped) && continue
         output_index = 2 * (second_index - 2) + 1
@@ -89,7 +89,7 @@ function _spacetime_line_segments(points, bounds=nothing)
     output
 end
 
-function _spacetime_segment_colors(colors)
+function _segment_colors(colors)
     output = Vector{eltype(colors)}(undef, 2 * max(length(colors) - 1, 0))
     for second_index in 2:length(colors)
         output_index = 2 * (second_index - 2) + 1
@@ -99,7 +99,7 @@ function _spacetime_segment_colors(colors)
     output
 end
 
-function _spacetime_clipped_points(points, bounds)
+function _clipped_points(points, bounds)
     hidden = Point3f(-1.0f6, -1.0f6, -1.0f6)
     x_lower, x_upper, y_lower, y_upper = bounds
     [

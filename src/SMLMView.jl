@@ -12,7 +12,7 @@ using WGLMakie.Makie: red, green, blue
 export smlmview
 export get_keybindings, set_keybinding!, reset_keybindings!, list_keys, list_actions
 export configure_display!
-export spacetime
+export trackview
 export DEFAULT_CHANNEL_COLORS, CHANNEL_COLOR_PRESETS
 
 # Include files in dependency order
@@ -22,8 +22,8 @@ include("display.jl")
 include("tools.jl")
 include("viewer.jl")
 include("viewer_composite.jl")
-include("spacetime/Spacetime.jl")
-using .Spacetime: spacetime, SpacetimeView
+include("trackview/TrackViewer.jl")
+using .TrackViewer: trackview, TrackView
 
 function __init__()
     load_keybindings!()

@@ -1,27 +1,27 @@
 # The scene schema: version declaration, validation and a small example scene.
 
 # Schema version this viewer reads and writes.
-const SCHEMA = "spacetime/1"
+const SCHEMA = "trackview/1"
 const SUPPORTED_SCHEMAS = (SCHEMA,)
 
 """
     scene_schema(scene) -> String
 
 The schema version a scene declares with its `"schema"` key. A scene without the
-key is read as `"spacetime/1"` (one `@info` per session suggests the exporter add
+key is read as `"trackview/1"` (one `@info` per session suggests the exporter add
 the key). A key that is present must be a string equal to a supported version;
 anything else, including `nothing`, throws an `ArgumentError` naming the supported
 versions.
 """
 function scene_schema(scene::AbstractDict)
     if !haskey(scene, "schema")
-        @info "spacetime scene declares no \"schema\" key; reading it as " *
+        @info "trackview scene declares no \"schema\" key; reading it as " *
               "\"$SCHEMA\". Add \"schema\" => \"$SCHEMA\" to the exporter." maxlog=1
         return SCHEMA
     end
     declared = scene["schema"]
     declared isa AbstractString && declared in SUPPORTED_SCHEMAS || throw(ArgumentError(
-        "unsupported spacetime schema $(repr(declared)); supported: " *
+        "unsupported trackview schema $(repr(declared)); supported: " *
         join(("\"$version\"" for version in SUPPORTED_SCHEMAS), ", "),
     ))
     String(declared)
@@ -511,7 +511,7 @@ end
 """
     validate_scene(scene::AbstractDict) -> Dict{String,Any}
 
-Check a scene against the `"spacetime/1"` schema and return its canonical copy.
+Check a scene against the `"trackview/1"` schema and return its canonical copy.
 
 Every key the viewer reads is converted to its canonical type (for example `Int`,
 `Float32`, `Vector{Vector{Float32}}`, `Matrix{Float32}`, `String`) and checked for
@@ -524,12 +524,12 @@ optional parts present (`ground_truth_tracks`,
 `trajectory_color_matches`, `links`, `dimer_*`). Ranges and finiteness apply after
 conversion to the canonical type. Throws one `ArgumentError` naming every offending
 key, including an unsupported `"schema"` value. The returned `Dict` is new (nested
-Dicts too) and carries `"schema" => "spacetime/1"`. Every array in it is exactly its
+Dicts too) and carries `"schema" => "trackview/1"`. Every array in it is exactly its
 canonical `Array` type, one-based (an OffsetArray, view or range is copied); arrays
 that already have exactly that type are reused, not copied. The caller's scene is
 never changed. A scene that matches
 the canonical types and ranges builds and runs the control self-test without
-throwing; [`spacetime`](@ref) hands the canonical scene to the builder.
+throwing; [`trackview`](@ref) hands the canonical scene to the builder.
 """
 function validate_scene(scene::AbstractDict)
     problems = String[]
@@ -541,7 +541,7 @@ function validate_scene(scene::AbstractDict)
     end
     canonical = _check_scene!(problems, scene)
     isempty(problems) || throw(ArgumentError(
-        "invalid spacetime scene ($(length(problems)) problem" *
+        "invalid trackview scene ($(length(problems)) problem" *
         (length(problems) == 1 ? "" : "s") * "):\n  " * join(problems, "\n  "),
     ))
     canonical
@@ -550,11 +550,11 @@ end
 """
     example_scene(; truth=true, links=true, dimers=false) -> Dict{String,Any}
 
-A small hand-written scene in the `"spacetime/1"` schema, with no simulation:
+A small hand-written scene in the `"trackview/1"` schema, with no simulation:
 three straight found tracks (one with a gap in its frames, one a singleton) over a
 bright voxel block. `truth` adds `ground_truth_tracks` with colour matches,
 `links` adds alternative links with weights, and `dimers` adds one dimer episode.
-The scene declares `"schema" => "spacetime/1"`. It is the example of the docs
+The scene declares `"schema" => "trackview/1"`. It is the example of the docs
 page and the test fixture.
 """
 function example_scene(; truth=true, links=true, dimers=false)

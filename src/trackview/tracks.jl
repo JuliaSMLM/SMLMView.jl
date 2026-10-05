@@ -100,7 +100,7 @@ function _track_render_data(track_scene)
             )
             push!(singleton_core_colors, core_color)
         end
-        continuous, gaps = _spacetime_paths(xs, ys, zs, fine_frames)
+        continuous, gaps = _track_paths(xs, ys, zs, fine_frames)
         append!(continuous_points, continuous)
         append!(
             continuous_halo_colors,
@@ -270,7 +270,7 @@ function _frame_track_data(track_scene, n_frames, sub_steps)
                 track_scene["track_z"][track_index],
             )
         ]
-        continuous, gaps = _spacetime_paths(
+        continuous, gaps = _track_paths(
             track_scene["track_x"][track_index],
             track_scene["track_y"][track_index],
             track_scene["track_z"][track_index],

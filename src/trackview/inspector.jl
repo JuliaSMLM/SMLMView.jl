@@ -502,7 +502,7 @@ function _add_frame_inspector!(
         # These points use overdraw and deliberately opt out of Axis3 clip
         # planes so their bright cores remain visible. They therefore need the
         # same explicit ROI masking as the trajectory line buffers.
-        _spacetime_clipped_points(
+        _clipped_points(
             frame_track_sets[source].frame_points_3d[frame_index],
             bounds,
         )
@@ -541,7 +541,7 @@ function _add_frame_inspector!(
         hidden = Point3f(-1.0f6, -1.0f6, -1.0f6)
         output = fill(hidden, capacity)
         (track_index == 0 || track_index > length(paths)) && return output
-        segments = _spacetime_line_segments(paths[track_index], bounds)
+        segments = _line_segments(paths[track_index], bounds)
         copyto!(output, 1, segments, 1, min(length(output), length(segments)))
         output
     end
@@ -550,7 +550,7 @@ function _add_frame_inspector!(
         hidden = Point3f(-1.0f6, -1.0f6, -1.0f6)
         output = fill(hidden, capacity)
         (track_index == 0 || track_index > length(paths)) && return output
-        points = _spacetime_clipped_points(paths[track_index], bounds)
+        points = _clipped_points(paths[track_index], bounds)
         copyto!(output, 1, points, 1, min(length(output), length(points)))
         output
     end

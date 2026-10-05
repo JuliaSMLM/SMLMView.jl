@@ -1,9 +1,9 @@
 # The public entry point: build, self-test, then serve or export.
 
 """
-    SpacetimeView
+    TrackView
 
-The result of [`spacetime`](@ref).
+The result of [`trackview`](@ref).
 
 Stable fields: `figure` and `axis` (the Makie `Figure` and `Axis3`), `health`
 (`(; passed, checks, failures)` of the control self-test), `schema` (the scene's
@@ -12,12 +12,12 @@ file, or `nothing`), `versions` (Julia, WGLMakie and Bonito versions) and `serve
 (the Ship of Tools `BrowserView` or the Bonito server behind `url`, or `nothing`).
 
 `controls` is the builder's internal state (inspector, ROI, `self_test`, ...) and
-may change in any release; do not rely on it. `spacetime(scene; output=:none).health`
+may change in any release; do not rely on it. `trackview(scene; output=:none).health`
 is the supported way to run the control self-test without serving.
 
 `wait(view)` blocks while a `:server` view is served; `close(view)` stops it.
 """
-struct SpacetimeView
+struct TrackView
     figure::Makie.Figure
     axis::Makie.Axis3
     controls::NamedTuple
@@ -29,9 +29,9 @@ struct SpacetimeView
     server::Any
 end
 
-function Base.show(io::IO, ::MIME"text/plain", view::SpacetimeView)
+function Base.show(io::IO, ::MIME"text/plain", view::TrackView)
     checks = view.health.checks
-    println(io, "SpacetimeView (", view.schema, ")")
+    println(io, "TrackView (", view.schema, ")")
     if view.health.passed
         println(io, "  control self-test: ", length(checks), " checks passed")
     else
@@ -44,12 +44,12 @@ function Base.show(io::IO, ::MIME"text/plain", view::SpacetimeView)
         ", Bonito ", view.versions.bonito)
 end
 
-Base.show(io::IO, view::SpacetimeView) =
-    print(io, "SpacetimeView(", view.schema, ", ", length(view.health.checks), " checks)")
+Base.show(io::IO, view::TrackView) =
+    print(io, "TrackView(", view.schema, ", ", length(view.health.checks), " checks)")
 
-Base.wait(view::SpacetimeView) = view.server isa Bonito.Server ? wait(view.server) : nothing
+Base.wait(view::TrackView) = view.server isa Bonito.Server ? wait(view.server) : nothing
 
-function Base.close(view::SpacetimeView)
+function Base.close(view::TrackView)
     view.server isa Bonito.Server && close(view.server)
     nothing
 end
@@ -70,7 +70,7 @@ function _serve_repl(repl, figure, open)
         Base.invokelatest(repl.wglshow, figure; open=false)
     else
         throw(ArgumentError(
-            "spacetime(; output=:serve) needs Ship of Tools with " *
+            "trackview(; output=:serve) needs Ship of Tools with " *
             "`wglshow(...; open=false)` (PR #103). Restart after updating Ship of " *
             "Tools, or pass open=true only when exactly one frontend is attached.",
         ))
@@ -78,14 +78,14 @@ function _serve_repl(repl, figure, open)
 end
 
 """
-    spacetime(scene::AbstractDict; output=:auto, open=false, html=nothing,
+    trackview(scene::AbstractDict; output=:auto, open=false, html=nothing,
               port=9384, link_alpha=identity, link_width=2.0,
               size=(1640, 920), frame_inspector=true,
-              azimuth=1.22, elevation=0.34) -> SpacetimeView
+              azimuth=1.22, elevation=0.34) -> TrackView
 
 Build the interactive space-time view of a scene (a `Dict{String,Any}` in the
-`"spacetime/1"` schema, see the Space-time viewer page and
-[`SMLMView.Spacetime.validate_scene`](@ref)), run its control self-test, then
+`"trackview/1"` schema, see the Track viewer page and
+[`SMLMView.TrackViewer.validate_scene`](@ref)), run its control self-test, then
 serve or export it. The scene is a Dict, not a path: load it first, for example
 with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
 
@@ -101,7 +101,7 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
     process; prints the URL and the `sot-fe open-url` line. `wait(view)` keeps the
     process serving; `close(view)` stops it. Never chosen by `:auto`.
   - `:html`: a standalone HTML file at `html`; the path is printed. With
-    `html=nothing` the file is `spacetime.html` in a fresh folder under the system
+    `html=nothing` the file is `trackview.html` in a fresh folder under the system
     temp directory, which is not deleted when Julia exits. The file grows with the
     voxel count (about 27 MB for 64x64x100).
   - `:none`: build and self-test only; returns the view without raising, even when
@@ -125,12 +125,12 @@ scene to the builder, and throws one `ArgumentError` listing every offending key
 A failing self-test throws before anything is served or written, naming the failed
 checks (except for `output=:none`).
 """
-function spacetime(scene::AbstractDict; kwargs...)
-    _spacetime(scene, _repl_module(); kwargs...)
+function trackview(scene::AbstractDict; kwargs...)
+    _trackview(scene, _repl_module(); kwargs...)
 end
 
 # `repl` is the Ship of Tools REPL module (or nothing); tests pass a stand-in.
-function _spacetime(
+function _trackview(
     scene::AbstractDict,
     repl;
     output::Symbol=:auto,
@@ -169,7 +169,7 @@ function _spacetime(
     )
     health = controls.self_test()
     health.passed || output === :none || error(
-        "spacetime control self-test failed before $output: " *
+        "trackview control self-test failed before $output: " *
         join(sort(health.failures), ", "),
     )
     versions = (;
@@ -184,28 +184,28 @@ function _spacetime(
     if output === :serve
         server = _serve_repl(repl, figure, open)
         url = string(server.url)
-        @info "spacetime served at $url"
+        @info "trackview served at $url"
     elseif output === :server
         app = Bonito.App(() -> figure)
         server = Bonito.Server(app, "127.0.0.1", Int(port))
         # Bonito moves to the next free port when `port` is taken.
         url = "http://127.0.0.1:$(server.port)/"
-        @info "spacetime serving at $url\n  target a frontend: " *
+        @info "trackview serving at $url\n  target a frontend: " *
               "sot-fe open-url $url --fe <handle>"
     elseif output === :html
         html_path = html === nothing ?
-            joinpath(mktempdir(; prefix="spacetime_", cleanup=false), "spacetime.html") :
+            joinpath(mktempdir(; prefix="trackview_", cleanup=false), "trackview.html") :
             String(html)
         mkpath(dirname(abspath(html_path)))
         Bonito.export_static(html_path, Bonito.App(() -> figure))
-        @info "spacetime saved $html_path"
+        @info "trackview saved $html_path"
     end
-    SpacetimeView(figure, axis, controls, health, schema, url, html_path, versions, server)
+    TrackView(figure, axis, controls, health, schema, url, html_path, versions, server)
 end
 
-function spacetime(path::AbstractString; kwargs...)
+function trackview(path::AbstractString; kwargs...)
     throw(ArgumentError(
-        "spacetime takes the scene Dict, not a path; load it first, " *
-        "for example `spacetime(JLD2.load(\"$path\", \"scene\"))`",
+        "trackview takes the scene Dict, not a path; load it first, " *
+        "for example `trackview(JLD2.load(\"$path\", \"scene\"))`",
     ))
 end

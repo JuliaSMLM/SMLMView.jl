@@ -1,6 +1,6 @@
 using Test
 using SMLMView
-using SMLMView: Spacetime, SpacetimeView
+using SMLMView: TrackViewer, TrackView
 using WGLMakie
 using Downloads
 
@@ -21,11 +21,11 @@ end
 wglshow(figure) = BrowserView("http://stub.invalid:2/")
 end
 
-example(; kwargs...) = Spacetime.example_scene(; kwargs...)
+example(; kwargs...) = TrackViewer.example_scene(; kwargs...)
 include("long/utils/mutations.jl")      # shared with the Long group
-build(scene; kwargs...) = spacetime(scene; output=:none, kwargs...)
+build(scene; kwargs...) = trackview(scene; output=:none, kwargs...)
 # The launcher with a stand-in Ship of Tools REPL module (or nothing).
-launch(scene, repl; kwargs...) = Spacetime._spacetime(scene, repl; kwargs...)
+launch(scene, repl; kwargs...) = TrackViewer._trackview(scene, repl; kwargs...)
 # A link_alpha that is not a function of the weight (it changes after the build), so the
 # links_alpha self-test check fails. Validated scenes cannot fail their self-test; this
 # keyword is how the tests drive the failure paths.
@@ -36,7 +36,7 @@ end
 luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 const OffsetArrays = Makie.OffsetArrays
 problems(scene) = try
-    Spacetime.validate_scene(scene); ""
+    TrackViewer.validate_scene(scene); ""
 catch e
     e isa ArgumentError ? e.msg : rethrow()
 end
@@ -44,10 +44,10 @@ end
 # One built view of the default scene, shared by the tests that only read it.
 const VIEW0 = build(example())
 
-@testset "Spacetime" begin
+@testset "TrackViewer" begin
     @testset "truth, colour matches and links" begin
         view = VIEW0
-        @test view isa SpacetimeView
+        @test view isa TrackView
         @test view.health.passed
         @test isempty(view.health.failures)
         @test all(values(view.health.checks))
@@ -59,12 +59,12 @@ const VIEW0 = build(example())
             :links_alpha, :links_width, :links_toggle, :links_found_source_only,
             :matched_trajectory_colors, :found_trajectory_colors_unique,
         ])
-        @test view.schema == "spacetime/1"
+        @test view.schema == "trackview/1"
         @test isnothing(view.url) && isnothing(view.html)
         @test view.controls.inspector.has_ground_truth
         @test view.versions.julia == VERSION
         @test occursin("20 checks passed", sprint(show, MIME("text/plain"), view))
-        @test occursin("SpacetimeView", sprint(show, view))
+        @test occursin("TrackView", sprint(show, view))
     end
 
     @testset "no truth" begin
@@ -125,25 +125,25 @@ const VIEW0 = build(example())
 
     @testset "schema declaration" begin
         scene = example()
-        @test Spacetime.scene_schema(scene) == "spacetime/1"
+        @test TrackViewer.scene_schema(scene) == "trackview/1"
         delete!(scene, "schema")
-        @test_logs (:info, r"schema") Spacetime.scene_schema(scene)
-        @test Spacetime.validate_scene(scene)["schema"] == "spacetime/1"
-        for declared in ("spacetime/2", nothing, Symbol("spacetime/1"), 1, "")
+        @test_logs (:info, r"schema") TrackViewer.scene_schema(scene)
+        @test TrackViewer.validate_scene(scene)["schema"] == "trackview/1"
+        for declared in ("trackview/2", nothing, Symbol("trackview/1"), 1, "")
             scene["schema"] = declared
             err = try; build(scene); nothing; catch e; e; end
             @test err isa ArgumentError
-            @test occursin("unsupported spacetime schema", err.msg)
-            @test occursin("spacetime/1", err.msg)
+            @test occursin("unsupported trackview schema", err.msg)
+            @test occursin("trackview/1", err.msg)
         end
-        @test Spacetime.validate_scene(example())["schema"] == "spacetime/1"
+        @test TrackViewer.validate_scene(example())["schema"] == "trackview/1"
         undeclared = example(); delete!(undeclared, "schema")
-        @test Spacetime.validate_scene(undeclared)["schema"] == "spacetime/1"
+        @test TrackViewer.validate_scene(undeclared)["schema"] == "trackview/1"
     end
 
     @testset "validation" begin
         for kw in ((;), (; truth=false), (; links=false), (; dimers=true))
-            @test Spacetime.validate_scene(example(; kw...)) isa Dict{String,Any}
+            @test TrackViewer.validate_scene(example(; kw...)) isa Dict{String,Any}
         end
         # the canonical scene is new, canonical-typed arrays are reused, the input is kept
         scene = example()
@@ -151,7 +151,7 @@ const VIEW0 = build(example())
         scene["raw_xyz"] = Float64.(scene["raw_xyz"])
         scene["track_x"] = [Float64.(path) for path in scene["track_x"]]
         before = deepcopy(scene)
-        canonical = Spacetime.validate_scene(scene)
+        canonical = TrackViewer.validate_scene(scene)
         @test scene == before
         @test canonical !== scene
         @test canonical["pixel_size"] isa Float64
@@ -244,11 +244,11 @@ const VIEW0 = build(example())
         scene["track_labels"] = ["a", String(UInt8[0xc3, 0x28]), "c"]
         @test occursin("track_labels", problems(scene))
 
-        @test_throws ArgumentError spacetime("scene.jld2")
-        @test_throws ArgumentError spacetime(example(); output=:bogus)
-        @test_throws ArgumentError spacetime(example(); output=:none, link_alpha=3)
-        @test_throws ArgumentError spacetime(example(); output=:none, link_width=-1)
-        @test_throws ArgumentError spacetime(example(); output=:none, link_width="wide")
+        @test_throws ArgumentError trackview("scene.jld2")
+        @test_throws ArgumentError trackview(example(); output=:bogus)
+        @test_throws ArgumentError trackview(example(); output=:none, link_alpha=3)
+        @test_throws ArgumentError trackview(example(); output=:none, link_width=-1)
+        @test_throws ArgumentError trackview(example(); output=:none, link_width="wide")
     end
 
     @testset "track metadata" begin
@@ -303,7 +303,7 @@ const VIEW0 = build(example())
                     "raw_normalization_high")
             delete!(scene, key)
         end
-        message = try; Spacetime.validate_scene(scene); ""; catch e; e.msg; end
+        message = try; TrackViewer.validate_scene(scene); ""; catch e; e.msg; end
         @test occursin("raw_threshold", message) && occursin("raw_quantile", message)
         scene["raw_threshold"] = 12.3
         scene["raw_quantile"] = 0.98
@@ -344,7 +344,7 @@ const VIEW0 = build(example())
         @test occursin("FAILED", sprint(show, MIME("text/plain"), view))
         path = joinpath(mktempdir(), "never.html")
         err = try
-            spacetime(scene; output=:html, html=path, link_alpha=unstable_alpha(),
+            trackview(scene; output=:html, html=path, link_alpha=unstable_alpha(),
                       frame_inspector=false)
             nothing
         catch e
@@ -369,22 +369,22 @@ const VIEW0 = build(example())
         expected = Float32[0.5 + 3 * 0.3, 0.5 + 3 * 0.3, 0.5 + 3 * 0.5, 0.5 + 3 * 0.5]
         @test links_of(view).linewidth[] ≈ expected
         # the other mappings are checked on the helpers (the builds above run the same ones)
-        @test Spacetime._link_alpha(w -> max(w, 0.4), 0.3f0) == 0.4f0
-        @test Spacetime._link_alpha(w -> max(w, 0.4), 0.5f0) == 0.5f0
-        @test Spacetime._link_widths(3, drawn_w) == 3f0
+        @test TrackViewer._link_alpha(w -> max(w, 0.4), 0.3f0) == 0.4f0
+        @test TrackViewer._link_alpha(w -> max(w, 0.4), 0.5f0) == 0.5f0
+        @test TrackViewer._link_widths(3, drawn_w) == 3f0
         # the opacity is clamped to [0, 1]
-        @test Spacetime._link_alpha(w -> 5w, 0.5) == 1
-        @test Spacetime._link_alpha(w -> -w, 0.5) == 0
-        err = try; Spacetime._link_alpha(w -> NaN, 0.5f0); nothing; catch e; e; end
+        @test TrackViewer._link_alpha(w -> 5w, 0.5) == 1
+        @test TrackViewer._link_alpha(w -> -w, 0.5) == 0
+        err = try; TrackViewer._link_alpha(w -> NaN, 0.5f0); nothing; catch e; e; end
         @test err isa ArgumentError && occursin("link_alpha(0.5)", err.msg)
-        @test_throws ArgumentError Spacetime._link_alpha(w -> Inf, 0.5f0)
+        @test_throws ArgumentError TrackViewer._link_alpha(w -> Inf, 0.5f0)
         # a negative or non-finite width is an ArgumentError: scalar, or function result
         # naming the weight (end to end once, the rest on the helper)
         @test_throws ArgumentError build(example(); link_width=-0.5)
-        err = try; Spacetime._link_width(w -> 1 - 4w, 0.3f0); nothing; catch e; e; end
+        err = try; TrackViewer._link_width(w -> 1 - 4w, 0.3f0); nothing; catch e; e; end
         @test err isa ArgumentError && occursin("link_width(0.3)", err.msg)
-        @test_throws ArgumentError Spacetime._link_width(w -> NaN, 0.3f0)
-        @test_throws ArgumentError Spacetime._link_width(Inf, 0.3f0)
+        @test_throws ArgumentError TrackViewer._link_width(w -> NaN, 0.3f0)
+        @test_throws ArgumentError TrackViewer._link_width(Inf, 0.3f0)
         # no links: no layer, no link checks
         view = build(example(; links=false))
         @test isnothing(view.controls.links_plot)
@@ -396,7 +396,7 @@ const VIEW0 = build(example())
         light(; kwargs...) = (; frame_inspector=false, kwargs...)
         mktempdir() do dir
             path = joinpath(dir, "sub", "scene.html")
-            view = spacetime(scene; output=:html, html=path, light()...)
+            view = trackview(scene; output=:html, html=path, light()...)
             @test view.html == path && isfile(path) && filesize(path) > 10_000
             @test occursin("<html", lowercase(first(read(path, String), 2000)))
             @test isnothing(view.url)
@@ -404,7 +404,7 @@ const VIEW0 = build(example())
 
         # ports outside 1:65535 are rejected; any Integer type in range serves (below)
         for port in (0, -1, 65536)
-            @test_throws ArgumentError spacetime(scene; output=:server, port, light()...)
+            @test_throws ArgumentError trackview(scene; output=:server, port, light()...)
         end
 
         # :server answers GET / with 200; Bonito moves on when the port is taken
@@ -421,13 +421,13 @@ const VIEW0 = build(example())
             end
             status
         end
-        first_view = spacetime(scene; output=:server, port=UInt16(rand(30000:45000)),
+        first_view = trackview(scene; output=:server, port=UInt16(rand(30000:45000)),
                                light()...)
         try
             @test first_view.url == "http://127.0.0.1:$(first_view.server.port)/"
             @test get_status(first_view.url) == 200
             taken = first_view.server.port
-            second = spacetime(scene; output=:server, port=Int32(taken), light()...)
+            second = trackview(scene; output=:server, port=Int32(taken), light()...)
             try
                 @test second.server.port != taken
                 @test second.url == "http://127.0.0.1:$(second.server.port)/"
@@ -459,9 +459,9 @@ const VIEW0 = build(example())
         # no REPL: :auto picks :html, :serve is an error
         view = launch(scene, nothing; light...)
         @test !isnothing(view.html) && isnothing(view.url)
-        # html=nothing: a fresh spacetime_* folder that is not deleted at exit
+        # html=nothing: a fresh trackview_* folder that is not deleted at exit
         @test isfile(view.html) && endswith(view.html, ".html")
-        @test startswith(basename(dirname(view.html)), "spacetime_")
+        @test startswith(basename(dirname(view.html)), "trackview_")
         @test_throws ArgumentError launch(scene, nothing; output=:serve, light...)
     end
 
@@ -554,7 +554,7 @@ const VIEW0 = build(example())
             width, height = X * 10.0^(-3uniform()), Y * 10.0^(-3uniform())
             x_low, y_low = (X - width) * uniform(), (Y - height) * uniform()
             roi = Float32.((x_low, x_low + width, y_low, y_low + height))
-            helper = Spacetime._clip_spacetime_segment(a, b, roi)
+            helper = TrackViewer._clip_segment(a, b, roi)
             expected = reference(Float64.(a), Float64.(b), Float64.(roi))
             extents = (X, Y, Float64(T))
             relative(u, v) = maximum(abs.(Float64.(u) .- v) ./ extents)
@@ -580,7 +580,7 @@ const VIEW0 = build(example())
     @testset "frame bounds" begin
         # T = 10: sub_steps * T <= 10^6, fine frames in [1 - kT, 2kT]
         scene = example(); scene["sub_steps"] = 10^5
-        @test Spacetime.validate_scene(scene) isa Dict
+        @test TrackViewer.validate_scene(scene) isa Dict
         scene["sub_steps"] = 10^5 + 1
         @test occursin("sub_steps", problems(scene))
         scene["sub_steps"] = typemax(Int)
@@ -649,11 +649,11 @@ const VIEW0 = build(example())
 
     @testset "schema problems are collected with the others" begin
         scene = example()
-        scene["schema"] = "spacetime/2"
+        scene["schema"] = "trackview/2"
         scene["nx"] = 0
         scene["links"]["w"][2] = -0.5f0
         message = problems(scene)
-        @test occursin("unsupported spacetime schema", message)
+        @test occursin("unsupported trackview schema", message)
         @test occursin("nx must be", message)
         @test occursin("links: w must be", message)
         @test occursin("3 problems", message)
@@ -665,7 +665,7 @@ const VIEW0 = build(example())
         # every value of the canonical scene has exactly its table type, on all fixtures
         for scene in (example(), example(; truth=false), example(; links=false),
                       example(; dimers=true), comprehensive_scene())
-            @test isempty(canonical_type_violations(Spacetime.validate_scene(scene)))
+            @test isempty(canonical_type_violations(TrackViewer.validate_scene(scene)))
         end
 
         # OffsetArrays, views and ranges are copied into one-based arrays, then build
@@ -680,7 +680,7 @@ const VIEW0 = build(example())
         paths[1] = OffsetArrays.OffsetVector(scene["track_x"][1], 3)
         scene["track_x"] = paths
         scene["track_colors"] = Base.view(scene["track_colors"], :, :)
-        canonical = Spacetime.validate_scene(scene)
+        canonical = TrackViewer.validate_scene(scene)
         @test isempty(canonical_type_violations(canonical))
         for key in ("raw_xyz", "source_frames", "track_ids", "matched_other_ids",
                     "track_colors")
@@ -695,7 +695,7 @@ const VIEW0 = build(example())
         # a range is a Vector{Int} too
         scene = example()
         scene["source_frames"] = 1:10
-        @test Spacetime.validate_scene(scene)["source_frames"] isa Vector{Int}
+        @test TrackViewer.validate_scene(scene)["source_frames"] isa Vector{Int}
     end
 
     @testset "the fixtures cover every key of the tables" begin

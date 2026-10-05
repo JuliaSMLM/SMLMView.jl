@@ -2,9 +2,9 @@
 CurrentModule = SMLMView
 ```
 
-# Space-time viewer
+# Track viewer
 
-[`spacetime`](@ref) shows a single-molecule tracking result as one interactive WGLMakie
+[`trackview`](@ref) shows a single-molecule tracking result as one interactive WGLMakie
 scene: the raw movie as translucent gray voxels in a 3D box (x, y, frame), the
 trajectories drawn through it, and a linked 2D frame inspector. It is the viewer behind
 RJTrack and SoftLinkTrack results.
@@ -22,29 +22,29 @@ RJTrack and SoftLinkTrack results.
 The input is a plain `Dict{String,Any}` of arrays and scalars, the *scene*. Nothing in the
 viewer depends on the tracker that produced it; an exporter in the tracking package writes
 the scene (for example with `jldsave(path; scene)`), and the caller loads it and passes the
-Dict. `spacetime` takes the Dict, not a path, so SMLMView carries no file-format dependency.
+Dict. `trackview` takes the Dict, not a path, so SMLMView carries no file-format dependency.
 
 ```julia
 using SMLMView, JLD2
 scene = load("scene.jld2", "scene")
-view = spacetime(scene)                # served in a Ship of Tools REPL, else standalone HTML
-view = spacetime(scene; output=:html, html="scene.html")
+view = trackview(scene)                # served in a Ship of Tools REPL, else standalone HTML
+view = trackview(scene; output=:html, html="scene.html")
 ```
 
 A small hand-written scene in the schema ships with the package, for trying the viewer and
 as the reference example of every key:
 
-```@example spacetime
+```@example trackview
 using SMLMView
-scene = SMLMView.Spacetime.example_scene(; truth=true, links=true, dimers=true)
+scene = SMLMView.TrackViewer.example_scene(; truth=true, links=true, dimers=true)
 sort(collect(keys(scene)))
 ```
 
 ```julia
-view = spacetime(SMLMView.Spacetime.example_scene(); output=:html)
+view = trackview(SMLMView.TrackViewer.example_scene(); output=:html)
 ```
 
-## Scene schema `"spacetime/1"`
+## Scene schema `"trackview/1"`
 
 ### The promise: canonical types and ranges
 
@@ -58,7 +58,7 @@ Each key below has a canonical type (the type in its row) and a range. The viewe
   an `UnitRange` of frames becomes a `Vector{Int}`, a vector of named tuples with
   `truth_id` and `estimate_id` becomes a vector of `(truth_id::Int, estimate_id::Int)`.
   `validate_scene` returns the converted scene as a new `Dict` (the input is never changed;
-  arrays that already have the canonical type are reused), and `spacetime` builds from it.
+  arrays that already have the canonical type are reused), and `trackview` builds from it.
 - A builder error after validation is a bug, not something the viewer reports as a
   scene error.
 
@@ -124,7 +124,7 @@ How the raw voxels are described in the legend depends on the optional `raw_rend
 
 | key | type | meaning |
 |---|---|---|
-| `schema` | `String` | `"spacetime/1"`, see the declaration rule |
+| `schema` | `String` | `"trackview/1"`, see the declaration rule |
 | `title` | `String` | 3D axis title (default `"Raw intensity and trajectories"`) |
 | `raw_render_mode` | `String` | `"all_voxels"` or `"thresholded"` (the default), see above |
 | `track_ids` | `Vector{Int}` | id of each track, one per track (default `1:n_tracks`; the default is used everywhere, including `trajectory_color_matches`) |
@@ -226,20 +226,20 @@ dimers only when the scene has `dimer_*` keys.
 
 ### The declaration rule
 
-A scene declares its schema with `"schema" => "spacetime/1"`. A scene without the key is read
-as `"spacetime/1"`, with one `@info` per session suggesting the exporter add the key. The
+A scene declares its schema with `"schema" => "trackview/1"`. A scene without the key is read
+as `"trackview/1"`, with one `@info` per session suggesting the exporter add the key. The
 absence of the key is the only fallback: a key that is present must be a string equal to a
 supported version, so `nothing`, a `Symbol` or another version is an error naming the
 supported versions; `validate_scene` lists it together with any other problems in its one
 `ArgumentError`. A new version of the schema will get a new number;
-`"spacetime/1"` scenes keep working.
+`"trackview/1"` scenes keep working.
 
-[`SMLMView.Spacetime.validate_scene`](@ref) checks the declaration, every key the viewer
+[`SMLMView.TrackViewer.validate_scene`](@ref) checks the declaration, every key the viewer
 reads with its type, shape and range, and the optional parts before anything is built, and
 throws one `ArgumentError` listing every problem. A scene it accepts builds and passes the
-control self-test. `spacetime` calls it first.
+control self-test. `trackview` calls it first.
 
-The public, non-exported names of the `SMLMView.Spacetime` module are `example_scene`,
+The public, non-exported names of the `SMLMView.TrackViewer` module are `example_scene`,
 `validate_scene` and `scene_schema`; they are declared `public` on Julia 1.11 and later.
 
 ## Link opacity and width
@@ -248,10 +248,10 @@ The default mapping is amber with opacity equal to the link weight `w` and width
 call-site choices, with no release needed:
 
 ```julia
-spacetime(scene)                                            # alpha = w
-spacetime(scene; link_alpha = w -> max(w, 0.15))            # a floor
-spacetime(scene; link_alpha = sqrt)
-spacetime(scene; link_alpha = _ -> 1, link_width = w -> 0.5 + 3w)   # width carries w
+trackview(scene)                                            # alpha = w
+trackview(scene; link_alpha = w -> max(w, 0.15))            # a floor
+trackview(scene; link_alpha = sqrt)
+trackview(scene; link_alpha = _ -> 1, link_width = w -> 0.5 + 3w)   # width carries w
 ```
 
 `link_alpha` is a function of `w`, its result clamped to `[0, 1]` (a non-finite result is an
@@ -271,26 +271,26 @@ self-test runs first (a failed check throws before anything is served or written
 | `:auto` | `:serve` when `Main.ShipToolsRepl` is defined, else `:html` |
 | `:serve` | `Main.ShipToolsRepl.wglshow(figure; open)`; `open=false` by default, then target one frontend with `sot-fe open-url <url> --fe <handle>` |
 | `:server` | a Bonito server on `127.0.0.1:port` (`port` in 1:65535; the next free port when it is taken, and `view.url` names the port used), for a standalone script; prints the URL; `wait(view)` keeps the process serving, `close(view)` stops it |
-| `:html` | standalone HTML at `html`; by default `spacetime.html` in a fresh `spacetime_*` folder under the temp directory, which persists after Julia exits |
-| `:none` | build and self-test only; the returned `SpacetimeView` carries `health` |
+| `:html` | standalone HTML at `html`; by default `trackview.html` in a fresh `trackview_*` folder under the temp directory, which persists after Julia exits |
+| `:none` | build and self-test only; the returned `TrackView` carries `health` |
 
 ```julia
-view = spacetime(scene; output=:server, port=9384)   # in a script
+view = trackview(scene; output=:server, port=9384)   # in a script
 wait(view)
 ```
 
-The result is a [`SpacetimeView`](@ref). Its stable fields are `figure`, `axis`, `health` (the
+The result is a [`TrackView`](@ref). Its stable fields are `figure`, `axis`, `health` (the
 control self-test result), `schema`, `url`, `html`, `versions` and `server`; `controls` is
-internal state that may change in any release. `spacetime(scene; output=:none).health` is the
+internal state that may change in any release. `trackview(scene; output=:none).health` is the
 supported way to run the control self-test without serving. The figure is built inside
 `with_theme(theme_dark())`, so the session's theme is not changed.
 
 ## Reference
 
-[`spacetime`](@ref) and [`SpacetimeView`](@ref) are in the [API Reference](api.md).
+[`trackview`](@ref) and [`TrackView`](@ref) are in the [API Reference](api.md).
 
 ```@docs
-SMLMView.Spacetime.validate_scene
-SMLMView.Spacetime.scene_schema
-SMLMView.Spacetime.example_scene
+SMLMView.TrackViewer.validate_scene
+SMLMView.TrackViewer.scene_schema
+SMLMView.TrackViewer.example_scene
 ```

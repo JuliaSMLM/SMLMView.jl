@@ -29,7 +29,7 @@ function _link_widths(mapping, weights)
     Float32[_link_width(mapping, weight) for weight in weights for _ in 1:2]
 end
 
-# The argument check of `spacetime`.
+# The argument check of `trackview`.
 _check_link_width(width::Real) = (_link_width(width, nothing); nothing)
 function _check_link_width(mapping)
     applicable(mapping, 0.5f0) || throw(ArgumentError(
@@ -151,12 +151,12 @@ function _build_figure(
     # separators preserve independent tracks while per-vertex colors keep their
     # identities.
     continuous_capacity = maximum(
-        render -> length(_spacetime_line_segments(render.continuous_points)),
+        render -> length(_line_segments(render.continuous_points)),
         values(track_render_sets);
         init=0,
     )
     gap_capacity = maximum(
-        render -> length(_spacetime_line_segments(render.gap_points)),
+        render -> length(_line_segments(render.gap_points)),
         values(track_render_sets);
         init=0,
     )
@@ -177,24 +177,24 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         render = track_render_sets[source]
-        segments = _spacetime_line_segments(
+        segments = _line_segments(
             render.continuous_points,
             frame_inspector ? bounds : nothing,
         )
         _padded(segments, continuous_capacity, hidden_point)
     end
     continuous_plot_halo_colors = Makie.lift(trajectory_source) do source
-        colors = _spacetime_segment_colors(
+        colors = _segment_colors(
             track_render_sets[source].continuous_halo_colors)
         _padded(colors, continuous_capacity, RGBAf(0, 0, 0, 0))
     end
     continuous_plot_mid_colors = Makie.lift(trajectory_source) do source
-        colors = _spacetime_segment_colors(
+        colors = _segment_colors(
             track_render_sets[source].continuous_mid_colors)
         _padded(colors, continuous_capacity, RGBAf(0, 0, 0, 0))
     end
     continuous_plot_core_colors = Makie.lift(trajectory_source) do source
-        colors = _spacetime_segment_colors(
+        colors = _segment_colors(
             track_render_sets[source].continuous_core_colors)
         _padded(colors, continuous_capacity, RGBf(0, 0, 0))
     end
@@ -203,18 +203,18 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         render = track_render_sets[source]
-        segments = _spacetime_line_segments(
+        segments = _line_segments(
             render.gap_points,
             frame_inspector ? bounds : nothing,
         )
         _padded(segments, gap_capacity, hidden_point)
     end
     gap_plot_halo_colors = Makie.lift(trajectory_source) do source
-        colors = _spacetime_segment_colors(track_render_sets[source].gap_halo_colors)
+        colors = _segment_colors(track_render_sets[source].gap_halo_colors)
         _padded(colors, gap_capacity, RGBAf(0, 0, 0, 0))
     end
     gap_plot_core_colors = Makie.lift(trajectory_source) do source
-        colors = _spacetime_segment_colors(track_render_sets[source].gap_core_colors)
+        colors = _segment_colors(track_render_sets[source].gap_core_colors)
         _padded(colors, gap_capacity, RGBAf(0, 0, 0, 0))
     end
     singleton_plot_points = Makie.lift(
@@ -222,7 +222,7 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         points = track_render_sets[source].singleton_points
-        clipped = frame_inspector ? _spacetime_clipped_points(points, bounds) : points
+        clipped = frame_inspector ? _clipped_points(points, bounds) : points
         _padded(clipped, singleton_capacity, hidden_point)
     end
     singleton_halo_colors = Makie.lift(trajectory_source) do source
@@ -356,7 +356,7 @@ function _build_figure(
                 second_point = link_endpoints[2index]
                 all(isfinite, first_point) && all(isfinite, second_point)
             else
-                !isnothing(_clip_spacetime_segment(
+                !isnothing(_clip_segment(
                     link_endpoints[2index - 1],
                     link_endpoints[2index],
                     bounds,
@@ -375,7 +375,7 @@ function _build_figure(
                     first_point = link_endpoints[2index - 1]
                     second_point = link_endpoints[2index]
                     clipped = if frame_inspector
-                        _clip_spacetime_segment(first_point, second_point, bounds)
+                        _clip_segment(first_point, second_point, bounds)
                     else
                         all(isfinite, first_point) && all(isfinite, second_point) ?
                             (first_point, second_point) : nothing
@@ -409,7 +409,7 @@ function _build_figure(
     # trajectories.  Overlay their model center with a gold binding path so
     # association state is visible without drawing a fictitious third emitter.
     dimer_segment_capacity = maximum(
-        render -> length(_spacetime_line_segments(render.dimer_points)),
+        render -> length(_line_segments(render.dimer_points)),
         values(track_render_sets);
         init=0,
     )
@@ -423,7 +423,7 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         render = track_render_sets[source]
-        segments = _spacetime_line_segments(
+        segments = _line_segments(
             render.dimer_points,
             frame_inspector ? bounds : nothing,
         )
@@ -434,7 +434,7 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         points = track_render_sets[source].dimer_onset_points
-        clipped = frame_inspector ? _spacetime_clipped_points(points, bounds) : points
+        clipped = frame_inspector ? _clipped_points(points, bounds) : points
         _padded(clipped, dimer_episode_capacity, hidden_point)
     end
     dimer_label_plot_points = Makie.lift(
@@ -442,7 +442,7 @@ function _build_figure(
         roi_bounds,
     ) do source, bounds
         points = track_render_sets[source].dimer_label_points
-        clipped = frame_inspector ? _spacetime_clipped_points(points, bounds) : points
+        clipped = frame_inspector ? _clipped_points(points, bounds) : points
         _padded(clipped, dimer_episode_capacity, hidden_point)
     end
     dimer_labels = Makie.lift(trajectory_source) do source
@@ -883,7 +883,7 @@ function _build_figure(
                         inspector.selected_points[] ==
                         gt_data.frame_points[inspector.selected_frame[]]
                     expected_gt_segments = _padded(
-                        _spacetime_line_segments(
+                        _line_segments(
                             track_render_sets[:ground_truth].continuous_points,
                             frame_inspector ? roi_bounds[] : nothing,
                         ),
@@ -949,7 +949,7 @@ function _build_figure(
                 checks[:roi_3d_sync] = !isnothing(axis_bounds) && all(
                     isapprox.(visible_bounds, axis_bounds; atol=2.0f0 * eps(Float32)),
                 )
-                expected_frame_points_3d = _spacetime_clipped_points(
+                expected_frame_points_3d = _clipped_points(
                     inspector.frame_track_sets[
                         inspector.trajectory_source[]
                     ].frame_points_3d[inspector.selected_frame[]],

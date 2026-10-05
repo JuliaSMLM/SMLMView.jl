@@ -15,13 +15,13 @@ smlmview
 configure_display!
 ```
 
-## Space-time Viewer
+## Track viewer
 
-See [Space-time viewer](spacetime.md) for the scene schema and output routes.
+See [Track viewer](trackview.md) for the scene schema and output routes.
 
 ```@docs
-spacetime
-SpacetimeView
+trackview
+TrackView
 ```
 
 ## Keybinding Functions

@@ -1,6 +1,6 @@
-# Mutation helpers shared by test/test_spacetime.jl (Core: validation sweep) and
+# Mutation helpers shared by test/test_trackview.jl (Core: validation sweep) and
 # test/long/mutation_builds.jl (Long: builds every accepted mutation). The including file
-# has `Spacetime` (SMLMView.Spacetime) and `spacetime` in scope.
+# has `TrackViewer` (SMLMView.TrackViewer) and `trackview` in scope.
 #
 # The requirement under test: for every mutation of every key of a scene, validate_scene
 # throws an ArgumentError, or else it returns a canonical scene that builds and passes its
@@ -102,7 +102,7 @@ short_error(error) = first(sprint(showerror, error), 140)
 # all-voxels keys present too), alpha keys, intensity unit, labels, id description,
 # matches with their gate, links, and dimer episodes in both track sets.
 function comprehensive_scene()
-    scene = Spacetime.example_scene(; dimers=true)
+    scene = TrackViewer.example_scene(; dimers=true)
     scene["raw_alpha_min"] = 0.001f0
     scene["raw_alpha_max"] = 0.08f0
     scene["raw_alpha_gamma"] = 1.2f0
@@ -124,18 +124,18 @@ function comprehensive_scene()
 end
 
 # The fixtures the sweeps mutate: everything switched on, and no ground truth.
-sweep_fixtures() = (comprehensive_scene(), Spacetime.example_scene(; truth=false))
+sweep_fixtures() = (comprehensive_scene(), TrackViewer.example_scene(; truth=false))
 
 # Key paths the schema tables name: top level, in ground_truth_tracks, in links.
 function table_key_paths()
     paths = Set{Vector{String}}()
-    for spec in vcat(Spacetime.SCENE_SPECS, Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS)
+    for spec in vcat(TrackViewer.SCENE_SPECS, TrackViewer.TRACK_SPECS, TrackViewer.DIMER_SPECS)
         push!(paths, [spec.key])
     end
-    for spec in vcat(Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS)
+    for spec in vcat(TrackViewer.TRACK_SPECS, TrackViewer.DIMER_SPECS)
         push!(paths, ["ground_truth_tracks", spec.key])
     end
-    for spec in Spacetime.LINK_SPECS
+    for spec in TrackViewer.LINK_SPECS
         push!(paths, ["links", spec.key])
     end
     for key in ("schema", "ground_truth_tracks", "links", "trajectory_color_matches")
@@ -155,11 +155,11 @@ function canonical_type_violations(canonical)
                 "$prefix$(spec.key) is a $(typeof(value)), not a $(spec.type)")
         end
     end
-    check(canonical, vcat(Spacetime.SCENE_SPECS, Spacetime.TRACK_SPECS,
-                          Spacetime.DIMER_SPECS), "")
+    check(canonical, vcat(TrackViewer.SCENE_SPECS, TrackViewer.TRACK_SPECS,
+                          TrackViewer.DIMER_SPECS), "")
     haskey(canonical, "ground_truth_tracks") && check(canonical["ground_truth_tracks"],
-        vcat(Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS), "ground_truth_tracks: ")
-    haskey(canonical, "links") && check(canonical["links"], Spacetime.LINK_SPECS, "links: ")
+        vcat(TrackViewer.TRACK_SPECS, TrackViewer.DIMER_SPECS), "ground_truth_tracks: ")
+    haskey(canonical, "links") && check(canonical["links"], TrackViewer.LINK_SPECS, "links: ")
     matches = NamedTuple{(:truth_id, :estimate_id),Tuple{Int,Int}}
     if haskey(canonical, "trajectory_color_matches") &&
        typeof(canonical["trajectory_color_matches"]) !== Vector{matches}
@@ -173,7 +173,7 @@ end
 # string; validation only.
 function validation_outcome(scene)
     canonical = try
-        Spacetime.validate_scene(scene)
+        TrackViewer.validate_scene(scene)
     catch error
         return error isa ArgumentError ? :rejected : "validate threw " * short_error(error)
     end
@@ -210,7 +210,7 @@ function full_outcome(scene)
     verdict = validation_outcome(scene)
     verdict === :accepted || return verdict
     view = try
-        spacetime(scene; output=:none)
+        trackview(scene; output=:none)
     catch error
         return "built with " * short_error(error)
     end
