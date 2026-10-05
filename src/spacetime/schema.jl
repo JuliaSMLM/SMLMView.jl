@@ -122,8 +122,9 @@ const LINK_SPECS = KeySpec[
 ]
 
 # Conversion to the canonical type: scalars are Reals (or Strings, or Bools) converted with
-# the type's constructor, arrays are converted element by element. An array that already
-# has the canonical type is reused, not copied. Anything else throws.
+# the type's constructor, arrays are converted element by element into a one-based
+# `Array` of exactly the canonical type (never an OffsetArray, view or range). An array
+# that already has exactly the canonical type is reused, not copied. Anything else throws.
 function _convert(::Type{T}, x) where {T<:Union{Int,Float32,Float64}}
     x isa Real || throw(ArgumentError("expected a number, got $(typeof(x))"))
     T(x)
@@ -139,14 +140,22 @@ end
 function _convert(::Type{Vector{T}}, x) where {T}
     x isa Vector{T} && return x
     x isa AbstractVector || throw(ArgumentError("expected a vector, got $(typeof(x))"))
-    T <: Union{Int,Float32,Float64} && eltype(x) <: Real && return T.(x)
-    T[_convert(T, element) for element in x]
+    _materialize(T, x)
 end
 function _convert(::Type{Matrix{T}}, x) where {T}
     x isa Matrix{T} && return x
     x isa AbstractMatrix || throw(ArgumentError("expected a matrix, got $(typeof(x))"))
-    T <: Union{Int,Float32,Float64} && eltype(x) <: Real && return T.(x)
-    T[_convert(T, element) for element in x]
+    _materialize(T, x)
+end
+
+# A new one-based `Array{T,N}` holding the converted elements of `x`, in iteration order.
+# `T.(x)` and comprehensions keep the axes of an OffsetArray, so the copy is explicit.
+function _materialize(::Type{T}, x::AbstractArray{<:Any,N}) where {T,N}
+    out = Array{T,N}(undef, size(x))
+    for (index, element) in enumerate(x)
+        out[index] = _convert(T, element)
+    end
+    out
 end
 
 # Every element of a (possibly nested) array, or the scalar itself, satisfies `test`.
@@ -413,16 +422,24 @@ Every key the viewer reads is converted to its canonical type (for example `Int`
 finite values, range and alignment: `pixel_size` in [1e-4, 1e3] μm, intensities,
 colours, link weights and quantiles in [0, 1], unique `track_ids` per set, track
 arrays of equal lengths, and the optional parts present (`ground_truth_tracks`,
-`trajectory_color_matches`, `links`, `dimer_*`). Throws one `ArgumentError` naming
-every offending key. The returned `Dict` is new (nested Dicts too) and carries
-`"schema" => "spacetime/1"`; arrays that already have the canonical type are
-reused, not copied, and the caller's scene is never changed. A scene that matches
+`trajectory_color_matches`, `links`, `dimer_*`). Ranges and finiteness apply after
+conversion to the canonical type. Throws one `ArgumentError` naming every offending
+key, including an unsupported `"schema"` value. The returned `Dict` is new (nested
+Dicts too) and carries `"schema" => "spacetime/1"`. Every array in it is exactly its
+canonical `Array` type, one-based (an OffsetArray, view or range is copied); arrays
+that already have exactly that type are reused, not copied. The caller's scene is
+never changed. A scene that matches
 the canonical types and ranges builds and runs the control self-test without
 throwing; [`spacetime`](@ref) hands the canonical scene to the builder.
 """
 function validate_scene(scene::AbstractDict)
-    scene_schema(scene)
     problems = String[]
+    try
+        scene_schema(scene)
+    catch error
+        error isa ArgumentError || rethrow()
+        push!(problems, error.msg)
+    end
     canonical = _check_scene!(problems, scene)
     isempty(problems) || throw(ArgumentError(
         "invalid spacetime scene ($(length(problems)) problem" *
