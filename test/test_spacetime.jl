@@ -386,17 +386,9 @@ const VIEW0 = build(example())
         @test isfile(view.html) && endswith(view.html, ".html")
         @test startswith(basename(dirname(view.html)), "spacetime_")
 
-        # ports outside 1:65535 are rejected; any Integer type in range serves
+        # ports outside 1:65535 are rejected; any Integer type in range serves (below)
         for port in (0, -1, 65536)
             @test_throws ArgumentError spacetime(scene; output=:server, port, light()...)
-        end
-        for T in (Int32, UInt16)
-            view = spacetime(scene; output=:server, port=T(rand(30000:45000)), light()...)
-            try
-                @test startswith(view.url, "http://127.0.0.1:")
-            finally
-                close(view)
-            end
         end
 
         # :server answers GET / with 200; Bonito moves on when the port is taken
@@ -413,12 +405,13 @@ const VIEW0 = build(example())
             end
             status
         end
-        first_view = spacetime(scene; output=:server, port=rand(30000:45000), light()...)
+        first_view = spacetime(scene; output=:server, port=UInt16(rand(30000:45000)),
+                               light()...)
         try
             @test first_view.url == "http://127.0.0.1:$(first_view.server.port)/"
             @test get_status(first_view.url) == 200
             taken = first_view.server.port
-            second = spacetime(scene; output=:server, port=taken, light()...)
+            second = spacetime(scene; output=:server, port=Int32(taken), light()...)
             try
                 @test second.server.port != taken
                 @test second.url == "http://127.0.0.1:$(second.server.port)/"
