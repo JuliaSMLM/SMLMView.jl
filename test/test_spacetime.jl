@@ -489,19 +489,25 @@ const VIEW0 = build(example())
         scene = example(); scene["raw_xyz"][1, 3] = -50f0
         @test occursin("raw_xyz", problems(scene))
 
-        # a link from x = -X to 2X (just inside the Float64 bounds) draws from 0 to X
-        inside_low(v) = (f = Float32(v); Float64(f) < v ? nextfloat(f) : f)
-        inside_high(v) = (f = Float32(v); Float64(f) > v ? prevfloat(f) : f)
+        # positions exactly on a bound (Float64, converted like the bounds) are accepted,
+        # and a link from x = -X to 2X draws from 0 to X
         scene = example()
         links = scene["links"]
-        links["x0"][2], links["x1"][2] = inside_low(-X), inside_high(2X)
-        links["y0"][2] = links["y1"][2] = Float32(Y / 2)
+        for key in ("x0", "x1", "y0", "y1")
+            links[key] = Float64.(links[key])
+        end
+        links["x0"][2], links["x1"][2] = -X, 2X
+        links["y0"][2] = links["y1"][2] = Y / 2
+        scene["track_x"] = [Float64.(path) for path in scene["track_x"]]
+        scene["track_x"][1][1] = 2X
+        @test problems(scene) == ""
         view = build(scene)
         @test view.health.passed
         drawn = view.controls.links_plot[1][]
-        x0, x1 = Float64(links["x0"][2]), Float64(links["x1"][2])
+        x0, x1 = Float64(Float32(-X)), Float64(Float32(2X))
+        y = Float64(Float32(Y / 2))
         z0, z1 = Float64(links["z0"][2]), Float64(links["z1"][2])
-        at(x) = (x, Float64(links["y0"][2]), z0 + (x - x0) / (x1 - x0) * (z1 - z0))
+        at(x) = (x, y, z0 + (x - x0) / (x1 - x0) * (z1 - z0))
         for (point, x) in zip(drawn[1:2], (0.0, X))
             @test all(abs.(Float64.(point) .- collect(at(x))) .<= 1e-6 * X)
         end

@@ -72,7 +72,8 @@ to the scene:
 - **Positions (rule P).** The scene's box is `[0, X] x [0, Y] x [0.5, T + 0.5]` with
   `X = nx*pixel_size`, `Y = ny*pixel_size` and `T = length(source_frames)`. Every position
   must lie in the box grown by its own size: x in `[-X, 2X]`, y in `[-Y, 2Y]`, z in
-  `[0.5 - T, 2T + 0.5]`. This covers `track_x/y/z` and `dimer_x/y/z` in both track sets, the
+  `[0.5 - T, 2T + 0.5]`; the bounds are converted to Float32 like the values, so a position
+  exactly on a bound is accepted. This covers `track_x/y/z` and `dimer_x/y/z` in both track sets, the
   link ends `x0` to `z1`, and the three columns of `raw_xyz`.
 - **Frames (rule F).** `sub_steps * T` is at most 10^6, and every `track_fine_frames` and
   `dimer_fine_frames` value (both sets) lies in `[1 - kT, 2kT]` with `k = sub_steps`.

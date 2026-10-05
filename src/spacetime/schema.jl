@@ -207,8 +207,9 @@ end
 # limits the builder sets, with X = nx*pixel_size, Y = ny*pixel_size and T the number of
 # frames. Every position must lie in B grown by its own size (x in [-X, 2X], y in
 # [-Y, 2Y], z in [0.5 - T, 2T + 0.5]); every fine frame in [1 - kT, 2kT] with
-# kT = sub_steps*T <= FRAME_LIMIT. Values are checked after conversion, against Float64
-# bounds, inclusive. `box` is nothing, or (; X, Y, T, frames) with frames nothing when
+# kT = sub_steps*T <= FRAME_LIMIT. Values are checked after conversion, inclusive, with
+# the position bounds converted to Float32 like the values, so a position exactly on a
+# bound is accepted. `box` is nothing, or (; X, Y, T, frames) with frames nothing when
 # sub_steps*T is out of bounds (reported once, in _check_scene!).
 const FRAME_LIMIT = 10^6
 
@@ -221,7 +222,8 @@ end
 function _check_positions!(problems, box, prefix, key, value, axis)
     (isnothing(box) || isnothing(value)) && return nothing
     low, high = _position_bounds(box, axis)
-    _all_elements(x -> low <= x <= high, value) || push!(problems, prefix *
+    low32, high32 = Float32(low), Float32(high)
+    _all_elements(x -> low32 <= x <= high32, value) || push!(problems, prefix *
         "$key must lie within [$low, $high] (the box grown by its own size)")
     nothing
 end
