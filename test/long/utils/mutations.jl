@@ -93,14 +93,111 @@ end
 
 short_error(error) = first(sprint(showerror, error), 140)
 
-# :rejected, :accepted, or a violation string; validation only.
-function validation_outcome(scene)
-    try
-        Spacetime.validate_scene(scene)
-        :accepted
-    catch error
-        error isa ArgumentError ? :rejected : "validate threw " * short_error(error)
+# A scene with every optional key of the tables: the thresholded raw mode (with the
+# all-voxels keys present too), alpha keys, intensity unit, labels, id description,
+# matches with their gate, links, and dimer episodes in both track sets.
+function comprehensive_scene()
+    scene = Spacetime.example_scene(; dimers=true)
+    scene["raw_alpha_min"] = 0.001f0
+    scene["raw_alpha_max"] = 0.08f0
+    scene["raw_alpha_gamma"] = 1.2f0
+    scene["raw_render_mode"] = "thresholded"
+    scene["raw_threshold"] = 12.5
+    scene["raw_quantile"] = 0.98
+    scene["raw_intensity_unit"] = "counts"
+    truth = scene["ground_truth_tracks"]
+    for set in (scene, truth)
+        set["track_labels"] = ["L$index" for index in eachindex(set["track_x"])]
+        set["track_id_description"] = "run id"
     end
+    for (key, value) in scene
+        startswith(key, "dimer_") && (truth[key] = deepcopy(value))
+    end
+    truth["dimer_labels"] = ["G1"]
+    truth["dimer_track_ids"] = [101 102]
+    scene
+end
+
+# The fixtures the sweeps mutate: everything switched on, and no ground truth.
+sweep_fixtures() = (comprehensive_scene(), Spacetime.example_scene(; truth=false))
+
+# Key paths the schema tables name: top level, in ground_truth_tracks, in links.
+function table_key_paths()
+    paths = Set{Vector{String}}()
+    for spec in vcat(Spacetime.SCENE_SPECS, Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS)
+        push!(paths, [spec.key])
+    end
+    for spec in vcat(Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS)
+        push!(paths, ["ground_truth_tracks", spec.key])
+    end
+    for spec in Spacetime.LINK_SPECS
+        push!(paths, ["links", spec.key])
+    end
+    for key in ("schema", "ground_truth_tracks", "links", "trajectory_color_matches")
+        push!(paths, [key])
+    end
+    paths
+end
+
+# Keys of the canonical scene whose value is not exactly its table type.
+function canonical_type_violations(canonical)
+    violations = String[]
+    function check(dict, specs, prefix)
+        for spec in specs
+            haskey(dict, spec.key) || continue
+            value = dict[spec.key]
+            typeof(value) === spec.type || push!(violations,
+                "$prefix$(spec.key) is a $(typeof(value)), not a $(spec.type)")
+        end
+    end
+    check(canonical, vcat(Spacetime.SCENE_SPECS, Spacetime.TRACK_SPECS,
+                          Spacetime.DIMER_SPECS), "")
+    haskey(canonical, "ground_truth_tracks") && check(canonical["ground_truth_tracks"],
+        vcat(Spacetime.TRACK_SPECS, Spacetime.DIMER_SPECS), "ground_truth_tracks: ")
+    haskey(canonical, "links") && check(canonical["links"], Spacetime.LINK_SPECS, "links: ")
+    matches = NamedTuple{(:truth_id, :estimate_id),Tuple{Int,Int}}
+    if haskey(canonical, "trajectory_color_matches") &&
+       typeof(canonical["trajectory_color_matches"]) !== Vector{matches}
+        push!(violations, "trajectory_color_matches is not a Vector of matches")
+    end
+    typeof(get(canonical, "schema", nothing)) === String || push!(violations, "schema")
+    violations
+end
+
+# :rejected, :accepted (the canonical scene has exactly the table types), or a violation
+# string; validation only.
+function validation_outcome(scene)
+    canonical = try
+        Spacetime.validate_scene(scene)
+    catch error
+        return error isa ArgumentError ? :rejected : "validate threw " * short_error(error)
+    end
+    violations = canonical_type_violations(canonical)
+    isempty(violations) ? :accepted :
+        "canonical types: " * first(join(violations, "; "), 140)
+end
+
+# Picks every track (and none) in every source of a built view; returns violations.
+function pick_every_track(view, name)
+    violations = String[]
+    inspector = view.controls.inspector
+    for source in (:found, :ground_truth)
+        haskey(inspector.frame_track_sets, source) || continue
+        while inspector.trajectory_source[] !== source
+            inspector.toggle_trajectory_source()
+        end
+        for track in 0:inspector.frame_track_sets[source].n_tracks
+            try
+                inspector.selected_track[] = track
+                inspector.selected_track_text[] isa String ||
+                    push!(violations, "$name: selected text is not a string")
+            catch error
+                push!(violations, "$name: picking $source track $track threw " *
+                                  short_error(error))
+            end
+        end
+    end
+    violations
 end
 
 # The full outcome: :rejected, (:accepted, view), or a violation string.

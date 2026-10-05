@@ -27,10 +27,19 @@ build(scene; kwargs...) = spacetime(scene; output=:none, kwargs...)
 # The launcher with a stand-in Ship of Tools REPL module (or nothing).
 launch(scene, repl; kwargs...) = Spacetime._spacetime(scene, repl; kwargs...)
 luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
+const OffsetArrays = Makie.OffsetArrays
+problems(scene) = try
+    Spacetime.validate_scene(scene); ""
+catch e
+    e isa ArgumentError ? e.msg : rethrow()
+end
+
+# One built view of the default scene, shared by the tests that only read it.
+const VIEW0 = build(example())
 
 @testset "Spacetime" begin
     @testset "truth, colour matches and links" begin
-        view = build(example())
+        view = VIEW0
         @test view isa SpacetimeView
         @test view.health.passed
         @test isempty(view.health.failures)
@@ -69,8 +78,8 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test view.health.passed
         @test !isempty(view.controls.dimer_plots)
         @test occursin("1 reciprocal dimer episode (D1)", view.controls.legend_text[])
-        @test isempty(build(example()).controls.dimer_plots)
-        @test !occursin("dimer", build(example()).controls.legend_text[])
+        @test isempty(VIEW0.controls.dimer_plots)
+        @test !occursin("dimer", VIEW0.controls.legend_text[])
         bare = build(example(; dimers=true); frame_inspector=false)
         @test bare.health.passed
         @test isnothing(bare.controls.inspector)
@@ -81,16 +90,17 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
     end
 
     @testset "labels" begin
+        @test VIEW0.axis.title[] == "example scene"
+        @test occursin("photons", VIEW0.controls.legend_text[])
         scene = example()
-        view = build(scene)
-        @test view.axis.title[] == "example scene"
         delete!(scene, "title")
+        scene["raw_intensity_unit"] = "counts"
         view = build(scene)
         @test view.axis.title[] == "Raw intensity and trajectories"
         inspector = view.controls.inspector
         legend = view.controls.legend_text[]
         @test occursin("3 trajectories, example found (example)", legend)
-        @test occursin("photons", legend)
+        @test occursin("counts", legend) && !occursin("photons", legend)
         @test !occursin(r"latent|molecul|Cell9"i, legend)
         @test occursin("example found: ", inspector.frame_axis.title[])
         @test !occursin("latent", inspector.frame_axis.title[])
@@ -104,9 +114,6 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         inspector.selected_track[] = 1
         @test occursin("matched found id 1", inspector.selected_track_text[])
         @test occursin("example truth", inspector.frame_axis.title[])
-        scene["raw_intensity_unit"] = "counts"
-        legend = build(scene).controls.legend_text[]
-        @test occursin("counts", legend) && !occursin("photons", legend)
     end
 
     @testset "schema declaration" begin
@@ -114,7 +121,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test Spacetime.scene_schema(scene) == "spacetime/1"
         delete!(scene, "schema")
         @test_logs (:info, r"schema") Spacetime.scene_schema(scene)
-        @test build(scene).schema == "spacetime/1"
+        @test Spacetime.validate_scene(scene)["schema"] == "spacetime/1"
         for declared in ("spacetime/2", nothing, Symbol("spacetime/1"), 1, "")
             scene["schema"] = declared
             err = try; build(scene); nothing; catch e; e; end
@@ -149,11 +156,6 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test canonical["trajectory_color_matches"] isa
               Vector{@NamedTuple{truth_id::Int, estimate_id::Int}}
         @test build(scene).health.passed
-        problems(scene) = try
-            Spacetime.validate_scene(scene); ""
-        catch e
-            e isa ArgumentError ? e.msg : rethrow()
-        end
 
         scene = example(); delete!(scene, "nx")
         err = try; build(scene); nothing; catch e; e; end
@@ -234,11 +236,6 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
     end
 
     @testset "track metadata" begin
-        problems(scene) = try
-            Spacetime.validate_scene(scene); ""
-        catch e
-            e isa ArgumentError ? e.msg : rethrow()
-        end
         for (key, bad) in (("matched_other_ids", ["a", "b", "c"]),
                            ("matched_other_ids", [1, 2]),
                            ("track_ids", ["a", "b", "c"]),
@@ -252,8 +249,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
             end
         end
         # a valid scene: selecting every track in both sets cannot throw
-        view = build(example())
-        inspector = view.controls.inspector
+        inspector = VIEW0.controls.inspector
         for source in (:found, :ground_truth)
             inspector.trajectory_source[] === source || inspector.toggle_trajectory_source()
             for track in 0:3
@@ -261,6 +257,8 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
                 @test inspector.selected_track_text[] isa String
             end
         end
+        inspector.toggle_trajectory_source()        # back to found, nothing selected
+        inspector.selected_track[] = 0
     end
 
     @testset "default track ids" begin
@@ -315,7 +313,7 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         view = build(scene)
         @test view.health.passed
         frame_points = view.controls.inspector.frame_track_sets[:found].frame_points
-        base_points = build(base).controls.inspector.frame_track_sets[:found].frame_points
+        base_points = VIEW0.controls.inspector.frame_track_sets[:found].frame_points
         @test length.(frame_points) == 2 .* length.(base_points)
         @test extrema(scene["track_z"][1]) == (0.75f0, 10.25f0)
         # the gap between frames 3 and 6 is a gap in steps too (dashed segment)
@@ -330,7 +328,11 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         @test :matched_trajectory_colors in Symbol.(view.health.failures)
         @test occursin("FAILED", sprint(show, MIME("text/plain"), view))
         path = joinpath(mktempdir(), "never.html")
-        err = try; spacetime(scene; output=:html, html=path); nothing; catch e; e; end
+        err = try
+            spacetime(scene; output=:html, html=path, frame_inspector=false); nothing
+        catch e
+            e
+        end
         @test err isa ErrorException
         @test occursin("matched_trajectory_colors", err.msg)
         @test !isfile(path)
@@ -340,27 +342,29 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
         links_of(view) = view.controls.links_plot
         drawn_w = Float32[0.3, 0.5]                     # the on_map = false links
         alphas(view) = [c.alpha for c in links_of(view).color[]][1:2:end]
-        plot = links_of(build(example()))
-        @test [c.alpha for c in plot.color[]][1:2:end] ≈ drawn_w
+        plot = links_of(VIEW0)
+        @test alphas(VIEW0) ≈ drawn_w
         @test plot.linewidth[] == 2.0
-        @test alphas(build(example(); link_alpha=sqrt)) ≈ sqrt.(drawn_w)
-        floor_view = build(example(); link_alpha=w -> max(w, 0.4))
-        @test floor_view.health.passed
-        @test alphas(floor_view) ≈ Float32[0.4, 0.5]
-        over = build(example(); link_alpha=w -> 5w)
-        @test all(c -> c.alpha == 1, links_of(over).color[])
-        view = build(example(); link_alpha=_ -> 1, link_width=w -> 0.5 + 3w)
+        # sqrt opacity and a per-segment width in one build
+        view = build(example(); link_alpha=sqrt, link_width=w -> 0.5 + 3w)
         @test view.health.passed
-        @test all(c -> c.alpha == 1, links_of(view).color[])
+        @test alphas(view) ≈ sqrt.(drawn_w)
         expected = Float32[0.5 + 3 * 0.3, 0.5 + 3 * 0.3, 0.5 + 3 * 0.5, 0.5 + 3 * 0.5]
         @test links_of(view).linewidth[] ≈ expected
-        view = build(example(); link_width=3)
-        @test view.health.passed && links_of(view).linewidth[] == 3
-        # a negative width is an ArgumentError: scalar, or function result naming the weight
+        floor_view = build(example(); link_alpha=w -> max(w, 0.4), link_width=3)
+        @test floor_view.health.passed
+        @test alphas(floor_view) ≈ Float32[0.4, 0.5]
+        @test links_of(floor_view).linewidth[] == 3
+        # the opacity is clamped to [0, 1]
+        @test Spacetime._link_alpha(w -> 5w, 0.5) == 1
+        @test Spacetime._link_alpha(w -> -w, 0.5) == 0
+        # a negative or non-finite width is an ArgumentError: scalar, or function result
+        # naming the weight (end to end once, the rest on the helper)
         @test_throws ArgumentError build(example(); link_width=-0.5)
-        err = try; build(example(); link_width=w -> 1 - 4w); nothing; catch e; e; end
+        err = try; Spacetime._link_width(w -> 1 - 4w, 0.3f0); nothing; catch e; e; end
         @test err isa ArgumentError && occursin("link_width(0.3)", err.msg)
-        @test_throws ArgumentError build(example(); link_width=w -> NaN)
+        @test_throws ArgumentError Spacetime._link_width(w -> NaN, 0.3f0)
+        @test_throws ArgumentError Spacetime._link_width(Inf, 0.3f0)
         # no links: no layer, no link checks
         view = build(example(; links=false))
         @test isnothing(view.controls.links_plot)
@@ -369,24 +373,25 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 
     @testset "output routes" begin
         scene = example()
+        light(; kwargs...) = (; frame_inspector=false, kwargs...)
         mktempdir() do dir
             path = joinpath(dir, "sub", "scene.html")
-            view = spacetime(scene; output=:html, html=path)
+            view = spacetime(scene; output=:html, html=path, light()...)
             @test view.html == path && isfile(path) && filesize(path) > 10_000
             @test occursin("<html", lowercase(first(read(path, String), 2000)))
             @test isnothing(view.url)
         end
         # html=nothing: a fresh folder that is not deleted at exit
-        view = spacetime(scene; output=:html)
+        view = spacetime(scene; output=:html, light()...)
         @test isfile(view.html) && endswith(view.html, ".html")
         @test startswith(basename(dirname(view.html)), "spacetime_")
 
         # ports outside 1:65535 are rejected; any Integer type in range serves
         for port in (0, -1, 65536)
-            @test_throws ArgumentError spacetime(scene; output=:server, port)
+            @test_throws ArgumentError spacetime(scene; output=:server, port, light()...)
         end
         for T in (Int32, UInt16)
-            view = spacetime(scene; output=:server, port=T(rand(30000:45000)))
+            view = spacetime(scene; output=:server, port=T(rand(30000:45000)), light()...)
             try
                 @test startswith(view.url, "http://127.0.0.1:")
             finally
@@ -408,12 +413,12 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
             end
             status
         end
-        first_view = spacetime(scene; output=:server, port=rand(30000:45000))
+        first_view = spacetime(scene; output=:server, port=rand(30000:45000), light()...)
         try
             @test first_view.url == "http://127.0.0.1:$(first_view.server.port)/"
             @test get_status(first_view.url) == 200
             taken = first_view.server.port
-            second = spacetime(scene; output=:server, port=taken)
+            second = spacetime(scene; output=:server, port=taken, light()...)
             try
                 @test second.server.port != taken
                 @test second.url == "http://127.0.0.1:$(second.server.port)/"
@@ -428,60 +433,118 @@ luminance(color) = Makie.Colors.Gray(Makie.to_color(color)).val
 
     @testset "serve through Ship of Tools" begin
         scene = example()
-        view = launch(scene, StubRepl)                            # :auto picks :serve
+        light = (; frame_inspector=false)
+        view = launch(scene, StubRepl; light...)                  # :auto picks :serve
         @test view.url == "http://stub.invalid:1/"
         @test view.server isa StubRepl.BrowserView && !view.server.open
         @test isnothing(view.html)
-        @test launch(scene, StubRepl; output=:serve, open=true).server.open
+        @test launch(scene, StubRepl; output=:serve, open=true, light...).server.open
         # a REPL whose wglshow has no `open` keyword
-        err = try; launch(scene, StubReplOld); nothing; catch e; e; end
+        err = try; launch(scene, StubReplOld; light...); nothing; catch e; e; end
         @test err isa ArgumentError && occursin("open=false", err.msg)
-        @test launch(scene, StubReplOld; open=true).url == "http://stub.invalid:2/"
+        old = launch(scene, StubReplOld; open=true, light...)
+        @test old.url == "http://stub.invalid:2/"
         # a failing self-test never reaches wglshow
         bad = example(); bad["track_colors"][1, :] = Float32[0.5, 0.5, 0.5]
-        @test_throws ErrorException launch(bad, StubRepl; output=:serve)
+        @test_throws ErrorException launch(bad, StubRepl; output=:serve, light...)
         # no REPL: :auto picks :html, :serve is an error
-        view = launch(scene, nothing)
+        view = launch(scene, nothing; light...)
         @test !isnothing(view.html) && isnothing(view.url)
-        @test_throws ArgumentError launch(scene, nothing; output=:serve)
+        @test_throws ArgumentError launch(scene, nothing; output=:serve, light...)
     end
 
     @testset "global theme and dark figure" begin
         before = Makie.current_default_theme()[:backgroundcolor][]
-        view = build(example())
+        view = VIEW0
         @test Makie.current_default_theme()[:backgroundcolor][] == before
         @test luminance(before) > 0.5                  # the session default stays light
         @test luminance(view.axis.titlecolor[]) > 0.3  # the figure is dark: light text
         @test luminance(view.figure.scene.backgroundcolor[]) < 0.2
     end
 
+    @testset "schema problems are collected with the others" begin
+        scene = example()
+        scene["schema"] = "spacetime/2"
+        scene["nx"] = 0
+        scene["links"]["w"][2] = -0.5f0
+        message = problems(scene)
+        @test occursin("unsupported spacetime schema", message)
+        @test occursin("nx must be", message)
+        @test occursin("links: w must be", message)
+        @test occursin("3 problems", message)
+        err = try; build(scene); nothing; catch e; e; end
+        @test err isa ArgumentError && err.msg == message
+    end
+
+    @testset "canonical containers" begin
+        # every value of the canonical scene has exactly its table type, on all fixtures
+        for scene in (example(), example(; truth=false), example(; links=false),
+                      example(; dimers=true), comprehensive_scene())
+            @test isempty(canonical_type_violations(Spacetime.validate_scene(scene)))
+        end
+
+        # OffsetArrays, views and ranges are copied into one-based arrays, then build
+        scene = example()
+        original = deepcopy(scene)
+        scene["raw_xyz"] = OffsetArrays.OffsetArray(scene["raw_xyz"], 5, 3)
+        scene["source_frames"] = OffsetArrays.OffsetVector(scene["source_frames"], -4)
+        scene["track_ids"] = OffsetArrays.OffsetVector(scene["track_ids"], 7)
+        scene["matched_other_ids"] =
+            OffsetArrays.OffsetVector(scene["matched_other_ids"], 2)
+        paths = Vector{Any}(scene["track_x"])
+        paths[1] = OffsetArrays.OffsetVector(scene["track_x"][1], 3)
+        scene["track_x"] = paths
+        scene["track_colors"] = Base.view(scene["track_colors"], :, :)
+        canonical = Spacetime.validate_scene(scene)
+        @test isempty(canonical_type_violations(canonical))
+        for key in ("raw_xyz", "source_frames", "track_ids", "matched_other_ids",
+                    "track_colors")
+            @test canonical[key] == original[key]
+            @test axes(canonical[key]) == axes(original[key])
+        end
+        @test canonical["track_x"][1] == original["track_x"][1]
+        @test axes(canonical["track_x"][1]) == axes(original["track_x"][1])
+        view = build(scene)
+        @test view.health.passed
+        @test isempty(pick_every_track(view, "offset arrays"))
+        # a range is a Vector{Int} too
+        scene = example()
+        scene["source_frames"] = 1:10
+        @test Spacetime.validate_scene(scene)["source_frames"] isa Vector{Int}
+    end
+
+    @testset "the fixtures cover every key of the tables" begin
+        fixtures = sweep_fixtures()
+        covered = Set(path for fixture in fixtures for path in key_paths(fixture))
+        @test isempty(setdiff(table_key_paths(), covered))
+        # the comprehensive scene builds with every optional part switched on
+        view = build(comprehensive_scene())
+        @test view.health.passed
+        @test isempty(pick_every_track(view, "comprehensive"))
+    end
+
     @testset "validated scenes build (mutation sweep)" begin
-        # Every mutation of every key, in both fixtures: validate_scene throws an
-        # ArgumentError, or else the scene builds and its self-test raises nothing (the
-        # Long group builds every accepted mutation; here one per key).
+        # Every mutation of every key of both fixtures: validate_scene throws an
+        # ArgumentError, or else returns a canonical scene (each value exactly its table
+        # type). The Long group builds every accepted mutation and runs its self-test.
         violations = String[]
-        accepted = Dict{String,Pair{String,Dict{String,Any}}}()
+        accepted = 0
         rejected = 0
-        for base in (example(; dimers=true), example(; truth=false))
+        for base in sweep_fixtures()
             for (name, scene) in mutated_scenes(base)
                 verdict = validation_outcome(scene)
                 if verdict === :rejected
                     rejected += 1
                 elseif verdict === :accepted
-                    key = first(split(name, " <- "))
-                    haskey(accepted, key) || (accepted[key] = name => scene)
+                    accepted += 1
                 else
                     push!(violations, "$name: $verdict")
                 end
             end
         end
-        for (key, (name, scene)) in accepted
-            outcome = full_outcome(scene)
-            outcome isa Tuple || push!(violations, "$name: $outcome")
-        end
         isempty(violations) || foreach(println, violations)
         @test isempty(violations)
         @test rejected > 900
-        @test length(accepted) > 20
+        @test accepted > 100
     end
 end
