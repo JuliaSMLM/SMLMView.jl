@@ -66,7 +66,7 @@ function _serve_repl(repl, figure, open)
     # Makie's shared layout and move painted controls away from their hitboxes.
     if open
         Base.invokelatest(repl.wglshow, figure)
-    elseif Base.invokelatest(hasmethod, repl.wglshow, Tuple{Any}, (:open,))
+    elseif hasmethod(repl.wglshow, Tuple{Any}, (:open,))
         Base.invokelatest(repl.wglshow, figure; open=false)
     else
         throw(ArgumentError(
@@ -118,9 +118,11 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
 - `frame_inspector`: add the 2D frame inspector (frame slider, ROI, track pick).
 - `azimuth`, `elevation`: initial 3D view angles.
 
-Validation (`validate_scene`) runs first and throws one `ArgumentError` listing
-every problem. A failing self-test throws before anything is served or written,
-naming the failed checks (except for `output=:none`).
+Validation (`validate_scene`) runs first: it converts the scene to its canonical
+types and ranges (for example Float64 positions to Float32), hands that canonical
+scene to the builder, and throws one `ArgumentError` listing every offending key.
+A failing self-test throws before anything is served or written, naming the failed
+checks (except for `output=:none`).
 """
 function spacetime(scene::AbstractDict; kwargs...)
     _spacetime(scene, _repl_module(); kwargs...)
@@ -153,9 +155,10 @@ function _spacetime(
         "output=:serve needs Main.ShipToolsRepl (a Ship of Tools REPL); " *
         "use :html or :server elsewhere"))
 
-    schema = validate_scene(scene)
+    canonical = validate_scene(scene)
+    schema = canonical["schema"]
     figure, axis, controls = build_figure(
-        scene;
+        canonical;
         resolution=size,
         azimuth,
         elevation,
@@ -183,7 +186,7 @@ function _spacetime(
         @info "spacetime served at $url"
     elseif output === :server
         app = Bonito.App(() -> figure)
-        server = Bonito.Server(app, "127.0.0.1", port)
+        server = Bonito.Server(app, "127.0.0.1", Int(port))
         # Bonito moves to the next free port when `port` is taken.
         url = "http://127.0.0.1:$(server.port)/"
         @info "spacetime serving at $url\n  target a frontend: " *
