@@ -46,12 +46,34 @@ view = spacetime(SMLMView.Spacetime.example_scene(); output=:html)
 
 ## Scene schema `"spacetime/1"`
 
+### The promise: canonical types and ranges
+
+Each key below has a canonical type (the type in its row) and a range. The viewer promises:
+
+- A scene that matches the canonical types and ranges builds and runs its control
+  self-test without throwing.
+- `validate_scene` rejects, with one `ArgumentError` naming each offending key, any scene it
+  cannot convert into those types and ranges.
+- Values are converted, not just checked: for example Float64 positions become Float32,
+  an `UnitRange` of frames becomes a `Vector{Int}`, a vector of named tuples with
+  `truth_id` and `estimate_id` becomes a vector of `(truth_id::Int, estimate_id::Int)`.
+  `validate_scene` returns the converted scene as a new `Dict` (the input is never changed;
+  arrays that already have the canonical type are reused), and `spacetime` builds from it.
+- A builder error after validation is a bug, not something the viewer reports as a
+  scene error.
+
+Ranges, besides "floating-point values are finite": `pixel_size` in [1e-4, 1e3] μm (and
+`nx*pixel_size`, `ny*pixel_size` usable as Float32 extents); intensities, track colors,
+link weights `w`, `raw_quantile` and `raw_normalization_quantile` in [0, 1]; `nx`, `ny`,
+`sub_steps` at least 1; ids, frames and counts representable as `Int`; `track_ids` unique
+within a set; `raw_alpha_min` and `raw_alpha_max` in [0, 1] and `raw_alpha_gamma` > 0.
+
 ### Required keys
 
 | key | type | meaning |
 |---|---|---|
 | `nx`, `ny` | `Int` | camera size in pixels |
-| `pixel_size` | `Float64` | pixel size in μm, `> 0` |
+| `pixel_size` | `Float64` | pixel size in μm, in [1e-4, 1e3] |
 | `sub_steps` | `Int` | model steps per source frame; `1` when `z` is the frame |
 | `source_frames` | `Vector{Int}` | the source frame numbers, non-empty, for example `collect(1:T)` |
 | `state_source` | `String` | what the shown tracks are, for example `"map"` (shown in the legend) |
@@ -140,7 +162,7 @@ as the tracks:
 ```
 "links" => Dict(
     "x0", "y0", "z0", "x1", "y1", "z1" => Vector{Float32},  # segment ends (y flipped like tracks)
-    "w"      => Vector{Float32},                            # link probability
+    "w"      => Vector{Float32},                            # link probability, in [0, 1]
     "on_map" => Vector{Bool})                               # link used by the MAP readout
 ```
 
