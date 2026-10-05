@@ -87,8 +87,13 @@ one-based (an `OffsetArray`, a view or a range is copied).
 | `track_fine_frames` | `Vector{Vector{Int}}` | the (fine) frame of each track point; a jump `> 1` is drawn as a dashed gap segment |
 | `track_colors` | `Matrix{Float32}`, `(n_tracks, 3)` | RGB, every value in `[0, 1]` |
 
-`T = length(source_frames)`. How the raw voxels are described in the legend depends on the
-optional `raw_render_mode`:
+`T = length(source_frames)`. The voxels are dense: `raw_xyz` and `raw_scaled_intensity` hold
+every pixel of every frame (`nx*ny*T` rows), in both `raw_render_mode` values. The older sparse
+thresholded form (only the brightest voxels) is outside the schema, because the 2D frame
+inspector reshapes the voxels into an `nx` x `ny` x `T` stack (the original builder could show
+sparse scenes only in 3D, without the inspector).
+
+How the raw voxels are described in the legend depends on the optional `raw_render_mode`:
 
 - `"all_voxels"` needs `raw_normalization_quantile` (`Float64` in [0, 1], for example
   `0.999`) and `raw_normalization_high` (`Float64`, the intensity at that quantile);
