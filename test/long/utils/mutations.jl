@@ -13,6 +13,9 @@ const SCALAR_MUTATIONS = (
     "int-min" => typemin(Int), "int-max" => typemax(Int),
 )
 
+# A String that is not valid UTF-8 (Makie's text layout throws on it).
+const INVALID_UTF8 = String(UInt8[0xff])
+
 # `value` with its first element replaced by `x`; the element type is widened, never
 # turned into floats, so integer arrays keep their integer range cases.
 function poke(value, x)
@@ -35,7 +38,8 @@ function mutations(value)
                            "symbol" => :bad]
     if value isa AbstractArray
         push!(out, "short" => collect(selectdim(value, 1, 1:size(value, 1) - 1)))
-        for (label, x) in (SCALAR_MUTATIONS..., "nothing" => nothing, "string" => "x")
+        for (label, x) in (SCALAR_MUTATIONS..., "nothing" => nothing, "string" => "x",
+                           "invalid-utf8" => INVALID_UTF8)
             push!(out, "$label-element" => poke(value, x))
         end
         if length(value) >= 2
@@ -50,6 +54,8 @@ function mutations(value)
                 push!(out, "$field-$label" => copy)
             end
         end
+    elseif value isa AbstractString
+        push!(out, "invalid-utf8" => INVALID_UTF8)
     elseif value isa Bool
         push!(out, "int" => 2)
     elseif value isa Real

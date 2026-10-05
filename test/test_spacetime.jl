@@ -235,6 +235,15 @@ const VIEW0 = build(example())
         scene = example(); scene["track_ids"] = [1, 1, 2]
         @test occursin("track_ids must be unique", problems(scene))
 
+        # text must be valid UTF-8 (Makie's text layout throws on it), also for a String
+        # that is already of the canonical type and for Vector{String}
+        scene = example(); scene["title"] = String(UInt8[0xff])
+        @test occursin("title must be", problems(scene))
+        @test occursin("valid UTF-8", problems(scene))
+        scene = example(; truth=false)
+        scene["track_labels"] = ["a", String(UInt8[0xc3, 0x28]), "c"]
+        @test occursin("track_labels", problems(scene))
+
         @test_throws ArgumentError spacetime("scene.jld2")
         @test_throws ArgumentError spacetime(example(); output=:bogus)
         @test_throws ArgumentError spacetime(example(); output=:none, link_alpha=3)
@@ -359,10 +368,10 @@ const VIEW0 = build(example())
         @test alphas(view) ≈ sqrt.(drawn_w)
         expected = Float32[0.5 + 3 * 0.3, 0.5 + 3 * 0.3, 0.5 + 3 * 0.5, 0.5 + 3 * 0.5]
         @test links_of(view).linewidth[] ≈ expected
-        floor_view = build(example(); link_alpha=w -> max(w, 0.4), link_width=3)
-        @test floor_view.health.passed
-        @test alphas(floor_view) ≈ Float32[0.4, 0.5]
-        @test links_of(floor_view).linewidth[] == 3
+        # the other mappings are checked on the helpers (the builds above run the same ones)
+        @test Spacetime._link_alpha(w -> max(w, 0.4), 0.3f0) == 0.4f0
+        @test Spacetime._link_alpha(w -> max(w, 0.4), 0.5f0) == 0.5f0
+        @test Spacetime._link_widths(3, drawn_w) == 3f0
         # the opacity is clamped to [0, 1]
         @test Spacetime._link_alpha(w -> 5w, 0.5) == 1
         @test Spacetime._link_alpha(w -> -w, 0.5) == 0
@@ -392,10 +401,6 @@ const VIEW0 = build(example())
             @test occursin("<html", lowercase(first(read(path, String), 2000)))
             @test isnothing(view.url)
         end
-        # html=nothing: a fresh folder that is not deleted at exit
-        view = spacetime(scene; output=:html, light()...)
-        @test isfile(view.html) && endswith(view.html, ".html")
-        @test startswith(basename(dirname(view.html)), "spacetime_")
 
         # ports outside 1:65535 are rejected; any Integer type in range serves (below)
         for port in (0, -1, 65536)
@@ -454,6 +459,9 @@ const VIEW0 = build(example())
         # no REPL: :auto picks :html, :serve is an error
         view = launch(scene, nothing; light...)
         @test !isnothing(view.html) && isnothing(view.url)
+        # html=nothing: a fresh spacetime_* folder that is not deleted at exit
+        @test isfile(view.html) && endswith(view.html, ".html")
+        @test startswith(basename(dirname(view.html)), "spacetime_")
         @test_throws ArgumentError launch(scene, nothing; output=:serve, light...)
     end
 
@@ -602,6 +610,43 @@ const VIEW0 = build(example())
         @test problems(scene) == ""
     end
 
+    @testset "zoom floor" begin
+        # The promise covers ROI spans of at least 1e-4 of the box per axis (a narrower
+        # zoom exceeds Float32 resolution). At exactly that span a crossing link still draws
+        # its clipped endpoints, matching an independent Float64 clip.
+        X, Y = 16 * 0.1, 12 * 0.1
+        scene = example()
+        links = scene["links"]
+        for key in ("x0", "x1", "y0", "y1")
+            links[key] = Float64.(links[key])
+        end
+        links["x0"][2], links["x1"][2] = -X, 2X
+        links["y0"][2] = links["y1"][2] = Y / 2
+        view = build(scene)
+        view.controls.inspector.set_roi(     # centred in the box, span 1e-4 of it per axis
+            (0.5X - 0.5e-4X, 0.5X + 0.5e-4X, 0.5Y - 0.5e-4Y, 0.5Y + 0.5e-4Y))
+        roi = Float64.(view.controls.roi_bounds[])
+        @test roi[2] - roi[1] >= 1e-4 * X * (1 - 1e-3)
+        @test roi[4] - roi[3] >= 1e-4 * Y * (1 - 1e-3)
+        drawn = view.controls.links_plot[1][]
+        a = Float64.((Float32(-X), Float32(Y / 2), links["z0"][2]))
+        b = Float64.((Float32(2X), Float32(Y / 2), links["z1"][2]))
+        # Float64 Liang-Barsky of the (constant-y) link against the ROI in effect
+        inside_y = roi[3] <= a[2] <= roi[4]
+        @test inside_y
+        t0 = (roi[1] - a[1]) / (b[1] - a[1])
+        t1 = (roi[2] - a[1]) / (b[1] - a[1])
+        expected = (a .+ t0 .* (b .- a), a .+ t1 .* (b .- a))
+        span = (roi[2] - roi[1], roi[4] - roi[3])
+        @test drawn[1] != drawn[2]
+        for (point, want) in zip(drawn[1:2], expected)
+            @test abs(Float64(point[1]) - want[1]) <= 1e-3 * span[1]
+            @test abs(Float64(point[2]) - want[2]) <= 1e-3 * span[2]
+            @test abs(Float64(point[3]) - want[3]) <=
+                  1e-3 * span[1] * abs(b[3] - a[3]) / abs(b[1] - a[1]) + 1e-6
+        end
+    end
+
     @testset "schema problems are collected with the others" begin
         scene = example()
         scene["schema"] = "spacetime/2"
@@ -675,6 +720,8 @@ const VIEW0 = build(example())
                 verdict = validation_outcome(scene)
                 if verdict === :rejected
                     rejected += 1
+                elseif verdict === :accepted && occursin("invalid-utf8", name)
+                    push!(violations, "$name: invalid UTF-8 accepted")
                 elseif verdict === :accepted
                     accepted += 1
                 else
