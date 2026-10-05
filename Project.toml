@@ -1,6 +1,6 @@
 name = "SMLMView"
 uuid = "83077460-0282-453d-8507-e85496fba1c9"
-version = "0.1.1"
+version = "0.1.2-DEV"
 authors = ["klidke@unm.edu"]
 
 [deps]
