@@ -93,9 +93,11 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
 - `output`: where the view goes.
   - `:auto`: `:serve` when `Main.ShipToolsRepl` is defined, else `:html`.
   - `:serve`: `Main.ShipToolsRepl.wglshow(figure; open)`. With `open=false` (the
-    default) the figure is served without opening a tab; target one frontend
-    afterwards with `sot-fe open-url <url> --fe <handle>`. Two clients on one figure
-    corrupt its layout.
+    default) the figure is served and shown nowhere: nothing appears on any frontend
+    until one opens `url`. Two ways to see it: pass `open=true` when exactly one
+    frontend is attached, or open the URL on one chosen frontend with
+    `sot-fe open-url <url> --fe <handle>`. Two clients on one figure corrupt its
+    layout.
   - `:server`: a standalone Bonito server on `127.0.0.1:port` (the next free port
     when `port` is taken; `url` names the port actually used) for a script's own
     process; prints the URL and the `sot-fe open-url` line. `wait(view)` keeps the
@@ -106,7 +108,8 @@ with `JLD2.load(path, "scene")`. A fresh figure is built on every call.
     voxel count (about 27 MB for 64x64x100).
   - `:none`: build and self-test only; returns the view without raising, even when
     the self-test fails, for tests and callers that serve the figure themselves.
-- `open`: open a browser tab from `:serve` (default `false`).
+- `open`: for `:serve` only. `true` opens the view on the attached frontend (use it
+  only when exactly one is attached); `false` (default) serves without showing it.
 - `link_alpha`: function of a link weight `w` giving its opacity (clamped to
   [0, 1]; a non-finite result throws an `ArgumentError` naming the weight); default
   `identity`, so opacity is exactly `w`. A floor is
