@@ -1,6 +1,6 @@
 # Keyboard and mouse interaction of the array viewers, driven through the figure's events
 # (bug-fix round 2026-11-07). Every testset here failed on 7dc2de3.
-using Test, Logging
+using Test
 using SMLMView
 using SMLMView.WGLMakie: Makie
 using SMLMView.WGLMakie.Makie: events, KeyEvent, Keyboard, Label, red, green, blue
@@ -100,6 +100,20 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         lim = c.ax.finallimits[]
         @test collect(lim.widths) ≈ [5.0, 6.0]
         @test size(c.rgb[]) == (5, 6)
+        # its remap keeps the index of the dim moving onto the slider (dim 3 at 25 of 30,
+        # dim 2 has 7), and a real slider move after the remap is honored
+        a = [Float64(100i + 10j + k) for i in 1:6, j in 1:7, k in 1:30]
+        c = smlmview((a, 2a); show=false)
+        c.slice_indices[3][] = 25
+        c.display_dims[] = (1, 3)
+        @test [o[] for o in c.slice_indices] == [1, 1, 25]
+        sl = only(s for s in c.fig.content if s isa Makie.Slider)
+        @test sl.value[] == 1
+        Makie.set_close_to!(sl, 5)
+        @test c.slice_indices[2][] == 5
+        c.display_dims[] = (1, 2)
+        @test sl.value[] == 25
+        @test [o[] for o in c.slice_indices] == [1, 5, 25]
     end
 
     @testset "readout follows a display-dims change under a still mouse" begin
@@ -111,19 +125,29 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         dims!(v.fig, 1, 3)            # now 16 rows (dim 1) x 30 cols (dim 3), x at 1
         mp = Makie.mouseposition(v.ax.scene)
         r, c = 16 - round(Int, mp[2]) + 1, round(Int, mp[1])
-        if 1 <= r <= 16 && 1 <= c <= 30
-            @test v.cursor_pos[] == (r, c)
-            @test v.pixel_value[] == data[r, v.slice_indices[2][], c]
-        else
-            @test startswith(status(v.fig), "---")
-        end
+        @test 1 <= r <= 16 && 1 <= c <= 30   # the mouse is still over the new plane
+        @test v.cursor_pos[] == (r, c)
+        @test v.pixel_value[] == data[r, v.slice_indices[2][], c]
+
+        # composite viewer, through its handle
+        a = reshape(Float64.(1:16*12*30), 16, 12, 30)
+        cv = smlmview((a, 2a); show=false)
+        cv.slice_indices[3][] = 25
+        hover!(cv, 8, 6, 16)
+        @test cv.pixel_values[] == (a[8, 6, 25], 2a[8, 6, 25])
+        cv.display_dims[] = (1, 3)
+        mp = Makie.mouseposition(cv.ax.scene)
+        r, c = 16 - round(Int, mp[2]) + 1, round(Int, mp[1])
+        @test 1 <= r <= 16 && 1 <= c <= 30
+        @test cv.cursor_pos[] == (r, c)
+        @test cv.pixel_values[] == (a[r, 1, c], 2a[r, 1, c])
     end
 
     @testset "log mapping on integer data" begin
         # UInt16, as a camera writes it
         data = UInt16.(reshape(100:100+16*16*3-1, 16, 16, 3))
         v = smlmview(data; show=false)
-        @test_logs min_level=Logging.Warn action!(v.fig, "mapping_cycle")
+        @test_logs min_level=Base.CoreLogging.Warn action!(v.fig, "mapping_cycle")
         @test v.mapping[].name == :log
         p = Float64.(plane(v))
         @test sort(vec(drawn(v))) ≈ sort(vec(log10.(p .- minimum(p) .+ 1)))
