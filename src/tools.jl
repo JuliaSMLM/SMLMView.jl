@@ -155,6 +155,21 @@ function update_cursor_nd!(ax, data::AbstractArray{T,N},
 end
 
 """
+    finite_minimum(data) -> Float64
+
+Minimum over the finite values of `data` (as `compute_colorrange_sampled` skips
+non-finite ones); 0.0 when there are none. The log mapping's offset.
+"""
+function finite_minimum(data::AbstractArray{<:Number})
+    m = Inf
+    for val in data
+        v = Float64(real(val))
+        isfinite(v) && v < m && (m = v)
+    end
+    return isfinite(m) ? m : 0.0
+end
+
+"""
 Compute colorrange by sampling (no full copy).
 """
 function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{Real,Real};

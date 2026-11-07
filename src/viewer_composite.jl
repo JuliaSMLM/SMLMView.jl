@@ -109,15 +109,21 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         return (nrows, ncols)
     end
 
-    # Apply transform to a slice
-    function apply_transform(slice::AbstractMatrix, transform::Symbol)
-        if transform == :log
-            min_val = minimum(slice)
-            shifted = slice .- min_val .+ 1.0
-            return log10.(shifted)
-        else
-            return slice
-        end
+    # Each channel's minimum, for the log offset under :global stretch (computed on first use)
+    channel_mins = Vector{Union{Nothing,Float64}}(nothing, C)
+    function channel_min(i)
+        m = channel_mins[i]
+        m === nothing && (m = channel_mins[i] = finite_minimum(channels[i]))
+        return m
+    end
+
+    # Apply transform to a slice: log10(x - offset + 1), where offset is the minimum of what
+    # the stretch spans (the channel for :global, the shown plane for :slice), the same
+    # minimum the colorrange uses, so values and range are on one scale.
+    function apply_transform(slice::AbstractMatrix, transform::Symbol, offset::Real)
+        transform == :log || return slice
+        # Subtract in floating point: in a signed integer type the difference can wrap
+        return log10.(float.(slice) .- offset .+ 1)
     end
 
     # Normalize a slice to 0-1 given colorrange
@@ -144,7 +150,9 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
             # Get slice for this channel
             raw_slice = prepare_slice_nd(channels[i], dd, slice_indices)
-            transformed = apply_transform(raw_slice, mapping.transform)
+            offset = mapping.transform == :log ?
+                (stretch == :global ? channel_min(i) : finite_minimum(raw_slice)) : 0.0
+            transformed = apply_transform(raw_slice, mapping.transform, offset)
 
             # Compute colorrange based on stretch mode
             if stretch == :slice
@@ -153,7 +161,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
                 # Use precomputed global range, transform if needed
                 base_range = channel_ranges[i][]
                 if mapping.transform == :log
-                    min_ch = minimum(channels[i])
+                    min_ch = offset
                     lo_shifted = base_range[1] - min_ch + 1.0
                     hi_shifted = base_range[2] - min_ch + 1.0
                     crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
@@ -208,6 +216,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     on(obs_mapping_idx) do _
         mapping = obs_mapping[]
+        fill!(channel_mins, nothing)  # rescan with the ranges
         for i in 1:C
             channel_ranges[i][] = compute_colorrange_sampled(channels[i], mapping.clip)
         end
@@ -369,8 +378,12 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         return Consume(false)
     end
 
-    # Status bar
+    # Status bar (an input on every slice index and channel toggle, so neither lags)
+    obs_slice_tuple = lift((idx...) -> idx, slice_indices...)
+    obs_visible_tuple = lift((vis...) -> vis, channel_visible...)
     status_text = @lift begin
+        idxs = $(obs_slice_tuple)
+        visible = $(obs_visible_tuple)
         pos = $(obs_cursor_pos)
         vals = $(obs_pixel_values)
         in_bounds = $(obs_in_bounds)
@@ -380,7 +393,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         slider_dims = $(obs_slider_to_dim)
 
         # Channel visibility indicators
-        vis_str = join([channel_visible[i][] ? string(i) : "-" for i in 1:C], "")
+        vis_str = join([visible[i] ? string(i) : "-" for i in 1:C], "")
 
         # Position and values
         if in_bounds
@@ -395,7 +408,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         # Slider states
         slider_strs = String[]
         for dim in slider_dims
-            push!(slider_strs, "$(dim):$(slice_indices[dim][])/$( data_size[dim])")
+            push!(slider_strs, "$(dim):$(idxs[dim])/$( data_size[dim])")
         end
         slider_str = isempty(slider_strs) ? "" : " | " * join(slider_strs, " ")
 
@@ -447,8 +460,8 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         end
     end
 
-    # Mouse hover - update pixel values for all channels
-    on(events(ax.scene).mouseposition) do _
+    # Cursor readout: pixel values of all channels under the mouse, at the current slice
+    function update_cursor_composite!()
         try
             mpos = mouseposition(ax.scene)
             if !isnothing(mpos)
@@ -484,6 +497,17 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
             end
         catch
             obs_in_bounds[] = false
+        end
+        return nothing
+    end
+
+    # Mouse hover
+    on(_ -> update_cursor_composite!(), events(ax.scene).mouseposition)
+
+    # Slice change (keyboard or slider) with the mouse held still
+    for idx_obs in slice_indices
+        on(idx_obs) do _
+            obs_in_bounds[] && update_cursor_composite!()
         end
     end
 

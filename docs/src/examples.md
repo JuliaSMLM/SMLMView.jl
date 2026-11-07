@@ -95,7 +95,7 @@ v = smlmview(data)
 
 # Press 'm' to cycle through:
 # - linear: Full min-max range
-# - log: Logarithmic scaling
+# - log: log10(x - min + 1), min over what the stretch spans (dataset or slice)
 # - p1_99: 1%-99% percentile clip
 # - p5_95: 5%-95% percentile clip
 

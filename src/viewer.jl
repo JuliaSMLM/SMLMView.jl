@@ -119,8 +119,9 @@ function smlmview(data::AbstractArray{T,N};
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
     obs_view_center = Observable((0.0, 0.0))  # Will be set by reset_view!
 
-    # Current slice data - reactive to display_dims and slice_indices
-    obs_slice_data = Observable(prepare_slice_nd(data, display_dims, slice_indices))
+    # Current slice data - reactive to display_dims and slice_indices.
+    # Floating-point element type, so the log mapping's values fit integer data too.
+    obs_slice_data = Observable{Matrix{float(T)}}(prepare_slice_nd(data, display_dims, slice_indices))
 
     # Coordinate observables - must update when display_dims changes
     # These ensure heatmap coordinate grid matches data shape
@@ -129,22 +130,31 @@ function smlmview(data::AbstractArray{T,N};
     obs_xs = Observable(1:initial_ncols)
     obs_ys = Observable(1:initial_nrows)
 
+    # Log mapping draws log10(x - offset + 1). The offset is the minimum of what the stretch
+    # spans (the whole array for :global, the shown plane for :slice), the same minimum
+    # update_colorrange! uses, so drawn values and colorrange are on one scale. The global
+    # minimum is cached between colorrange updates (a full scan per slice step is too slow).
+    global_min = Ref{Union{Nothing,Float64}}(nothing)
+    function log_offset(plane::AbstractArray)
+        if obs_stretch[] == :global
+            global_min[] === nothing && (global_min[] = finite_minimum(data))
+            return global_min[]
+        end
+        return finite_minimum(plane)
+    end
+
     # Apply intensity transform to slice data
     function apply_transform(slice::AbstractMatrix, transform::Symbol)
-        if transform == :log
-            # Log transform: shift to positive, take log10
-            min_val = minimum(slice)
-            shifted = slice .- min_val .+ 1.0  # Ensure all positive
-            return log10.(shifted)
-        else
-            return slice
-        end
+        transform == :log || return slice
+        # Subtract in floating point: in a signed integer type the difference can wrap
+        return log10.(float.(slice) .- log_offset(slice) .+ 1)
     end
 
     # Update colorrange based on current mapping and stretch mode
     function update_colorrange!()
         mapping = obs_mapping[]
         stretch = obs_stretch[]
+        global_min[] = nothing  # rescan with the range, as the range itself is rescanned
 
         # Get source data for colorrange: global dataset or current slice
         # Use extract_slice_raw (not prepare_slice_nd) to get raw values without display transforms
@@ -158,7 +168,7 @@ function smlmview(data::AbstractArray{T,N};
         if mapping.transform == :log
             # Transform the range for log display
             lo, hi = crange
-            min_data = minimum(source_data)
+            min_data = log_offset(source_data)
             lo_shifted = lo - min_data + 1.0
             hi_shifted = hi - min_data + 1.0
             crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
@@ -179,14 +189,21 @@ function smlmview(data::AbstractArray{T,N};
         obs_slice_data[] = apply_transform(raw_slice, mapping.transform)
     end
 
-    on(obs_display_dims) do _
+    # One handler for every display-dims change (keys or `v.display_dims[] = ...`):
+    # sliders, slice, colorrange, figure and view all follow the new dims.
+    on(obs_display_dims) do dd
+        slider_dims = sort(collect(setdiff(1:N, dd)))
+        slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_slice!()
+        # The per-slice range belongs to the plane now shown
+        obs_stretch[] == :slice && update_colorrange!()
         # Resize figure to match new aspect ratio
         new_size = calculate_figure_size()
         resize!(fig, new_size...)
         # Recreate heatmap to force WGLMakie texture reallocation with new dimensions
         empty!(ax)
         create_heatmap!()
+        reset_view!()
     end
 
     for idx_obs in slice_indices
@@ -205,9 +222,10 @@ function smlmview(data::AbstractArray{T,N};
         update_slice!()
     end
 
-    # When stretch mode changes, update colorrange
+    # When stretch mode changes, update colorrange (and the log offset of the drawn slice)
     on(obs_stretch_idx) do _
         update_colorrange!()
+        obs_mapping[].transform == :log && update_slice!()
     end
 
     # Get current display dimensions' sizes
@@ -322,8 +340,6 @@ function smlmview(data::AbstractArray{T,N};
            1 <= new_dims[2] <= N &&
            new_dims != obs_display_dims[]
             obs_display_dims[] = new_dims
-            obs_slider_to_dim[] = sort(collect(setdiff(1:N, new_dims)))
-            reset_view!()
         end
     end
 
@@ -413,8 +429,10 @@ function smlmview(data::AbstractArray{T,N};
         return Consume(false)
     end
 
-    # Status bar
+    # Status bar (an input on every slice index, so the slider readout never lags)
+    obs_slice_tuple = lift((idx...) -> idx, slice_indices...)
     status_text = @lift begin
+        idxs = $(obs_slice_tuple)
         pos = $(obs_cursor_pos)
         val = $(obs_pixel_value)
         in_bounds = $(obs_in_bounds)
@@ -439,7 +457,7 @@ function smlmview(data::AbstractArray{T,N};
         # Slider states
         slider_strs = String[]
         for dim in slider_dims
-            push!(slider_strs, "$(dim):$(slice_indices[dim][])/$( data_size[dim])")
+            push!(slider_strs, "$(dim):$(idxs[dim])/$( data_size[dim])")
         end
         slider_str = isempty(slider_strs) ? "" : " | " * join(slider_strs, " ")
 
@@ -456,6 +474,9 @@ function smlmview(data::AbstractArray{T,N};
 
     # Create sliders for non-display dims
     sliders = []
+    # True while the sliders are being reassigned to new dims: a slider's value moves
+    # then (Makie clamps it into the new range), and that move is not a user choice.
+    remapping = Ref(false)
     slider_labels_obs = Observable{String}[]
     slider_ranges_obs = Observable{UnitRange{Int}}[]
 
@@ -475,6 +496,7 @@ function smlmview(data::AbstractArray{T,N};
         # Slider → slice_index
         let i = i
             on(sl.value) do v
+                remapping[] && return
                 dim = obs_slider_to_dim[][i]
                 if slice_indices[dim][] != v
                     slice_indices[dim][] = v
@@ -499,12 +521,17 @@ function smlmview(data::AbstractArray{T,N};
 
     # Update slider assignments when display_dims changes
     on(obs_slider_to_dim) do new_dims
-        for (i, dim) in enumerate(new_dims)
-            if i <= length(sliders)
-                slider_labels_obs[i][] = format_dim_label(dim, dim_names)
-                slider_ranges_obs[i][] = 1:data_size[dim]
-                set_close_to!(sliders[i], slice_indices[dim][])
+        remapping[] = true
+        try
+            for (i, dim) in enumerate(new_dims)
+                if i <= length(sliders)
+                    slider_labels_obs[i][] = format_dim_label(dim, dim_names)
+                    slider_ranges_obs[i][] = 1:data_size[dim]
+                    set_close_to!(sliders[i], slice_indices[dim][])
+                end
             end
+        finally
+            remapping[] = false
         end
     end
 
