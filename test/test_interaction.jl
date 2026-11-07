@@ -63,6 +63,13 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         dims!(v.fig, 1, 2)
         @test v.slice_indices[3][] == 25
         @test occursin("3:25/30", status(v.fig))
+        # the slider widget shows the kept index, and a real move after the remap is honored
+        dims!(v.fig, 1, 3)
+        sl = only(c for c in v.fig.content if c isa Makie.Slider)
+        @test sl.value[] == 1
+        Makie.set_close_to!(sl, 5)
+        @test v.slice_indices[2][] == 5
+        @test v.slice_indices[3][] == 25
     end
 
     @testset "v.display_dims[] = ... moves the sliders too" begin
@@ -73,6 +80,43 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         @test v.slice_indices[2][] == 2
         @test v.slice_indices[3][] == 1
         @test occursin("2:2/11", status(v.fig))
+        # and resets the view to the new plane (10 rows x 12 cols)
+        action!(v.fig, "zoom_in")
+        @test v.view_zoom_idx[] != SMLMView.DEFAULT_ZOOM_IDX
+        v.display_dims[] = (2, 3)     # 11 rows x 12 cols
+        @test v.view_zoom_idx[] == SMLMView.DEFAULT_ZOOM_IDX
+        lim = v.ax.finallimits[]
+        @test collect(lim.origin) ≈ [0.5, 0.5]
+        @test collect(lim.widths) ≈ [12.0, 11.0]
+
+        # composite viewer, the same through its handle
+        a = [Float64(100i + 10j + k) for i in 1:6, j in 1:7, k in 1:5]
+        c = smlmview((a, 2a); show=false)
+        c.display_dims[] = (1, 3)     # 6 rows x 5 cols
+        action!(c.fig, "slice_next")
+        @test c.slice_indices[2][] == 2
+        @test c.slice_indices[3][] == 1
+        @test occursin("2:2/7", status(c.fig))
+        lim = c.ax.finallimits[]
+        @test collect(lim.widths) ≈ [5.0, 6.0]
+        @test size(c.rgb[]) == (5, 6)
+    end
+
+    @testset "readout follows a display-dims change under a still mouse" begin
+        data = reshape(Float64.(1:16*12*30), 16, 12, 30)
+        v = smlmview(data; show=false)
+        v.slice_indices[3][] = 25
+        hover!(v, 8, 6, 16)
+        @test v.cursor_pos[] == (8, 6) && v.pixel_value[] == data[8, 6, 25]
+        dims!(v.fig, 1, 3)            # now 16 rows (dim 1) x 30 cols (dim 3), x at 1
+        mp = Makie.mouseposition(v.ax.scene)
+        r, c = 16 - round(Int, mp[2]) + 1, round(Int, mp[1])
+        if 1 <= r <= 16 && 1 <= c <= 30
+            @test v.cursor_pos[] == (r, c)
+            @test v.pixel_value[] == data[r, v.slice_indices[2][], c]
+        else
+            @test startswith(status(v.fig), "---")
+        end
     end
 
     @testset "log mapping on integer data" begin
@@ -125,6 +169,31 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         v.slice_indices[3][] = 1
         v.stretch_idx[] = 2
         @test count(isnan, drawn(v)) == 1
+        # a -Inf pixel draws at the bottom of the range; the rest of its plane stays finite
+        data[3, 4, 1] = 0
+        data[2, 2, 2] = -Inf
+        for stretch in (1, 2)
+            v = smlmview(data; show=false)
+            v.stretch_idx[] = stretch
+            v.mapping_idx[] = 2
+            v.slice_indices[3][] = 2
+            @test all(isfinite, drawn(v))
+            @test minimum(drawn(v)) == 0
+            @test occursin("3:2/3", status(v.fig))
+            c = smlmview((data, data); show=false)
+            c.stretch_idx[] = stretch
+            c.mapping_idx[] = 2
+            c.slice_indices[3][] = 2
+            @test all(x -> all(isfinite, (red(x), green(x), blue(x))), c.rgb[])
+        end
+        # data changed in place below the cached global minimum still draws
+        data[2, 2, 2] = 250
+        v = smlmview(data; show=false)
+        v.mapping_idx[] = 2
+        data[:, :, 3] .-= 500
+        v.slice_indices[3][] = 3
+        @test all(isfinite, drawn(v))
+        @test occursin("3:3/3", status(v.fig))
     end
 
     @testset "status bar shows the current slice" begin

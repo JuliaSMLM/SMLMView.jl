@@ -117,15 +117,6 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         return m
     end
 
-    # Apply transform to a slice: log10(x - offset + 1), where offset is the minimum of what
-    # the stretch spans (the channel for :global, the shown plane for :slice), the same
-    # minimum the colorrange uses, so values and range are on one scale.
-    function apply_transform(slice::AbstractMatrix, transform::Symbol, offset::Real)
-        transform == :log || return slice
-        # Subtract in floating point: in a signed integer type the difference can wrap
-        return log10.(float.(slice) .- offset .+ 1)
-    end
-
     # Normalize a slice to 0-1 given colorrange
     function normalize_slice(slice::AbstractMatrix, crange::Tuple{Float64, Float64})
         lo, hi = crange
@@ -150,24 +141,20 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
             # Get slice for this channel
             raw_slice = prepare_slice_nd(channels[i], dd, slice_indices)
-            offset = mapping.transform == :log ?
-                (stretch == :global ? channel_min(i) : finite_minimum(raw_slice)) : 0.0
-            transformed = apply_transform(raw_slice, mapping.transform, offset)
+            # Log: log10(x - offset + 1), offset the minimum of what the stretch spans (the
+            # channel for :global, the shown plane for :slice), as the range uses
+            islog = mapping.transform == :log
+            offset = !islog ? 0.0 :
+                stretch == :global ? channel_min(i) : finite_minimum(raw_slice)
+            transformed = islog ? log_values(raw_slice, offset) : raw_slice
 
             # Compute colorrange based on stretch mode
             if stretch == :slice
                 crange = compute_colorrange_sampled(transformed, mapping.clip)
             else
-                # Use precomputed global range, transform if needed
+                # Use precomputed global range, on the drawn values' scale
                 base_range = channel_ranges[i][]
-                if mapping.transform == :log
-                    min_ch = offset
-                    lo_shifted = base_range[1] - min_ch + 1.0
-                    hi_shifted = base_range[2] - min_ch + 1.0
-                    crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
-                else
-                    crange = base_range
-                end
+                crange = islog ? log_range(base_range, offset) : base_range
             end
 
             # Normalize and blend with channel color
@@ -204,8 +191,18 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     end
 
     # Connect updates
-    on(obs_display_dims) do _
+    # One handler for every display-dims change (`v.display_dims[] = ...`): sliders, image,
+    # figure, view and cursor readout all follow the new dims.
+    on(obs_display_dims) do dd
+        slider_dims = sort(collect(setdiff(1:N, dd)))
+        slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_composite!()
+        resize!(fig, calculate_figure_size()...)
+        # Recreate the image so WGLMakie allocates a texture of the new size
+        empty!(ax)
+        create_image!()
+        reset_view!()
+        obs_in_bounds[] && update_cursor_composite!()
     end
 
     for idx_obs in slice_indices
@@ -421,6 +418,9 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     # Sliders for non-display dims
     sliders = []
+    # True while the sliders are being reassigned to new dims: a slider's value moves
+    # then (Makie clamps it into the new range), and that move is not a user choice.
+    remapping = Ref(false)
     slider_labels_obs = Observable{String}[]
     slider_ranges_obs = Observable{UnitRange{Int}}[]
 
@@ -438,6 +438,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
         let i = i
             on(sl.value) do v
+                remapping[] && return
                 dim = obs_slider_to_dim[][i]
                 if slice_indices[dim][] != v
                     slice_indices[dim][] = v
@@ -457,6 +458,22 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
                     end
                 end
             end
+        end
+    end
+
+    # Reassign the sliders when display_dims changes
+    on(obs_slider_to_dim) do new_dims
+        remapping[] = true
+        try
+            for (i, dim) in enumerate(new_dims)
+                if i <= length(sliders)
+                    slider_labels_obs[i][] = "dim $dim:"
+                    slider_ranges_obs[i][] = 1:data_size[dim]
+                    set_close_to!(sliders[i], slice_indices[dim][])
+                end
+            end
+        finally
+            remapping[] = false
         end
     end
 

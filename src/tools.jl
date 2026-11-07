@@ -170,6 +170,23 @@ function finite_minimum(data::AbstractArray{<:Number})
 end
 
 """
+    log_values(slice, offset) -> Matrix
+
+The log mapping's drawn values, `log10(x - offset + 1)`, computed in floating point (an
+integer difference could wrap). A value below `offset` (a -Inf pixel, or data changed in
+place below a cached minimum) maps to 0, the bottom of the range; NaN stays NaN.
+"""
+log_values(slice::AbstractArray, offset::Real) = log10.(max.(float.(slice) .- offset .+ 1, 1))
+
+"""
+    log_range((lo, hi), offset) -> (Float64, Float64)
+
+The colorrange `(lo, hi)` on the same log scale as `log_values(slice, offset)`.
+"""
+log_range(crange::Tuple{Real,Real}, offset::Real) =
+    (log10(max(crange[1] - offset + 1, 1.0)), log10(max(crange[2] - offset + 1, 1.0)))
+
+"""
 Compute colorrange by sampling (no full copy).
 """
 function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{Real,Real};

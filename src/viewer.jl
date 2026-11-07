@@ -144,11 +144,8 @@ function smlmview(data::AbstractArray{T,N};
     end
 
     # Apply intensity transform to slice data
-    function apply_transform(slice::AbstractMatrix, transform::Symbol)
-        transform == :log || return slice
-        # Subtract in floating point: in a signed integer type the difference can wrap
-        return log10.(float.(slice) .- log_offset(slice) .+ 1)
-    end
+    apply_transform(slice::AbstractMatrix, transform::Symbol) =
+        transform == :log ? log_values(slice, log_offset(slice)) : slice
 
     # Update colorrange based on current mapping and stretch mode
     function update_colorrange!()
@@ -165,14 +162,8 @@ function smlmview(data::AbstractArray{T,N};
         end
 
         crange = compute_colorrange_sampled(source_data, mapping.clip)
-        if mapping.transform == :log
-            # Transform the range for log display
-            lo, hi = crange
-            min_data = log_offset(source_data)
-            lo_shifted = lo - min_data + 1.0
-            hi_shifted = hi - min_data + 1.0
-            crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
-        end
+        # Transform the range for log display, on the drawn values' scale
+        mapping.transform == :log && (crange = log_range(crange, log_offset(source_data)))
         obs_colorrange[] = crange
     end
 
@@ -204,6 +195,9 @@ function smlmview(data::AbstractArray{T,N};
         empty!(ax)
         create_heatmap!()
         reset_view!()
+        # The image moved under a still mouse: read the pixel now under it
+        obs_in_bounds[] && update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
+                                             obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
 
     for idx_obs in slice_indices
