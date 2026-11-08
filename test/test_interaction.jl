@@ -4,7 +4,7 @@
 using Test
 using SMLMView
 using SMLMView.WGLMakie: Makie
-using SMLMView.WGLMakie.Makie: events, KeyEvent, Keyboard, Label, red, green, blue, RGBf
+using SMLMView.WGLMakie.Makie: events, KeyEvent, Keyboard, Label, red, green, blue, RGBf, on
 
 # An array whose axes start at 2, as an OffsetArray's can (the viewers need one-based axes).
 struct ShiftedAxes{T,N} <: AbstractArray{T,N}
@@ -33,8 +33,13 @@ function hover!(v, row, col, nrows)
     events(v.fig).mouseposition[] = (px, py)
 end
 
-# The matrix the heatmap draws (before colorrange), in display orientation.
-drawn(v) = v.ax.scene.plots[end][3][]
+# The matrix the heatmap draws (before colorrange), in display orientation and data units.
+# The viewer draws values relative to the colorrange's low end (Makie draws in Float32), so
+# add back the shift between the handle's range and the plot's own.
+function drawn(v)
+    hm = v.ax.scene.plots[end]
+    return Float32.(hm[3][] .+ (v.colorrange[][1] - hm.colorrange[][1]))
+end
 
 plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
 
@@ -397,5 +402,56 @@ end
         @test smlmview((a, a); colors=rgb, show=false).colors == rgb[1:2]
         @test smlmview((a, a); colors=(RGBf(1, 0, 0), RGBf(0, 1, 0)), show=false).colors == rgb[1:2]
         @test smlmview((a, a); colors=(:red, :lime), show=false).colors == rgb[1:2]
+        @test_throws r"transparent" smlmview((a, a); colors=((:red, 0.0), :lime), show=false)
+    end
+
+    @testset "quantiles with no finite sample fall back to the exact range" begin
+        # max_samples=2 samples positions 2 and 4, both NaN
+        @test SMLMView.compute_colorrange_sampled([100.0, NaN, 200.0, NaN], (0.05, 0.95);
+                                                  max_samples=2) == (100.0, 200.0)
+    end
+
+    @testset "readout follows zoom, pan and reset under a still mouse" begin
+        a = Float64[100i + j for i in 1:20, j in 1:20]
+        for v in (smlmview(a; show=false), smlmview((a, 2 .* a); show=false))
+            value() = haskey(v, :pixel_value) ? v.pixel_value[] : v.pixel_values[][1]
+            hover!(v, 5, 5, 20)
+            @test v.cursor_pos[] == (5, 5)
+            @test value() == 505
+            action!(v.fig, "zoom_in")  # 2x about the center: x 5.5..15.5, y 5.5..15.5
+            @test v.cursor_pos[] == (8, 8)
+            @test value() == 808
+            @test occursin("(8,", status(v.fig)) && occursin("808", status(v.fig))
+            action!(v.fig, "pan_right")
+            @test v.cursor_pos[] != (8, 8)
+            @test value() == a[v.cursor_pos[]...]
+            action!(v.fig, "reset")
+            @test v.cursor_pos[] == (5, 5)
+            @test value() == 505
+        end
+    end
+
+    @testset "data with a range narrow next to its magnitude keeps its contrast" begin
+        v = smlmview([1e9 1e9+1; 1e9 1e9+1]; show=false)
+        @test v.colorrange[] == (1e9, 1e9 + 1)
+        hm = v.ax.scene.plots[end]
+        @test sort(unique(hm[3][])) == [0, 1]       # drawn as Float32, still two levels
+        @test collect(hm.colorrange[]) == [0, 1]
+        v = smlmview(fill(1e40, 2, 2); show=false)  # beyond Float32's range
+        hm = v.ax.scene.plots[end]
+        @test all(isfinite, hm[3][])
+        @test all(isfinite, hm.colorrange[]) && hm.colorrange[][1] < hm.colorrange[][2]
+    end
+
+    @testset "no listener sees an invalid display_dims pair" begin
+        for v in (smlmview(rand(5, 6, 7); show=false), smlmview((rand(5, 6, 7), rand(5, 6, 7)); show=false))
+            seen = Tuple{Int,Int}[]
+            on(dd -> push!(seen, dd), v.display_dims; priority=1)
+            on(dd -> push!(seen, dd), v.display_dims; priority=typemax(Int))
+            @test_throws ArgumentError (v.display_dims[] = (1, 1))
+            @test isempty(seen)
+            v.display_dims[] = (1, 3)
+            @test seen == [(1, 3), (1, 3)]
+        end
     end
 end

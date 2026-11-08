@@ -13,8 +13,9 @@ Launch an interactive viewer for multi-channel composite display.
 
 # Keyword Arguments
 - `colors`: Channel colors, default CMY (cyan, magenta, yellow). Any tuple of at least as many
-  colors as channels, in any form Makie takes as a color (e.g. `CHANNEL_COLOR_PRESETS[:rgb]`,
-  `(RGBf(1,0,0), RGBf(0,1,0))` or `(:red, :green)`); the first `length(channels)` are used.
+  opaque colors as channels, in any form Makie takes as a color (e.g.
+  `CHANNEL_COLOR_PRESETS[:rgb]`, `(RGBf(1,0,0), RGBf(0,1,0))` or `(:red, :green)`); the first
+  `length(channels)` are used. A transparent color throws an `ArgumentError`.
 - `names`: Channel names (one per channel), shown in the status bar
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims are (rows, cols)
 - `clip::Tuple{Real,Real}=(0.0, 1.0)`: Quantiles of the `linear` mapping's intensity stretch
@@ -69,11 +70,15 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
     # Default colors: the first C of DEFAULT_CHANNEL_COLORS
     actual_colors = colors === nothing ? ntuple(i -> DEFAULT_CHANNEL_COLORS[i], C) :
         ntuple(C) do i
-            try
-                RGB{Float64}(Makie.to_color(colors[i]))
+            c = try
+                Makie.to_color(colors[i])
             catch
                 throw(ArgumentError("colors[$i] = $(repr(colors[i])) is not a color"))
             end
+            # Channels blend by adding their colors; a transparency would have no meaning
+            Makie.Colors.alpha(c) == 1 || throw(ArgumentError(
+                "colors[$i] = $(repr(colors[i])) is transparent; the composite blends opaque colors"))
+            RGB{Float64}(c)
         end
     channel_names = names === nothing ? nothing : ntuple(i -> String(names[i]), C)
 
@@ -208,10 +213,11 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
 
     # Connect updates
     # One handler for every display-dims change (`v.display_dims[] = ...`): sliders, image,
-    # figure, view and cursor readout all follow the new dims. It is the first listener, so
-    # an invalid pair is put back before anything else sees it.
+    # figure, view and cursor readout all follow the new dims. It runs first (the highest
+    # priority, registered first), so an invalid pair is put back before any other listener
+    # sees it.
     shown_dims = Ref(display_dims)
-    on(obs_display_dims) do dd
+    on(obs_display_dims; priority=typemax(Int)) do dd
         try
             check_display_dims(N, dd)
         catch
@@ -509,7 +515,7 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
     # Cursor readout: pixel values of all channels under the mouse, at the current slice
     function update_cursor_composite!()
         try
-            mpos = mouseposition(ax.scene)
+            mpos = mouse_data_position(ax)
             if !isnothing(mpos)
                 dd = obs_display_dims[]
                 nrows = data_size[dd[1]]
@@ -549,6 +555,9 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
 
     # Mouse hover
     on(_ -> update_cursor_composite!(), events(ax.scene).mouseposition)
+
+    # Zoom, pan or reset move the image under a still mouse: read the pixel now under it
+    on(_ -> update_cursor_composite!(), ax.finallimits)
 
     # Slice change (keyboard or slider) with the mouse held still
     for idx_obs in slice_indices

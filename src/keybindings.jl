@@ -61,19 +61,53 @@ function string_to_key(s::String)
     return get(KEY_MAP, lowercase(s), Keyboard.unknown)
 end
 
+# Digit keys 1-9 pick the display dims (array viewer) and toggle channels (composite); the
+# viewers read them before any action, so an action bound to one could never fire.
+const RESERVED_KEYS = (Keyboard._1, Keyboard._2, Keyboard._3, Keyboard._4, Keyboard._5,
+                       Keyboard._6, Keyboard._7, Keyboard._8, Keyboard._9)
+
 """
     resolve_keybinding(action, key_str, default_key) -> Keyboard.Button
 
-The key bound to `action`: `key_str` (a saved preference) when it names a key, otherwise
-the default, with a warning.
+The key bound to `action`: `key_str` (a saved preference) when it names a key that is not a
+reserved digit, otherwise the default, with a warning.
 """
 function resolve_keybinding(action::String, key_str::String, default_key::String)
     button = string_to_key(key_str)
     if button == Keyboard.unknown
         @warn "Unknown key '$key_str' saved for '$action', using the default '$default_key'"
         button = string_to_key(default_key)
+    elseif button in RESERVED_KEYS
+        @warn "Key '$key_str' saved for '$action' is a digit, which picks display dims " *
+              "and toggles channels; using the default '$default_key'"
+        button = string_to_key(default_key)
     end
     return button
+end
+
+"""
+    separate_keybindings!(bindings) -> bindings
+
+Where two actions share a key, only one of them could ever fire. Put a saved binding that
+shares a key back to its default (no two defaults share one) until every key is distinct.
+"""
+function separate_keybindings!(bindings::Dict{String,Keyboard.Button})
+    isdefault(a) = bindings[a] == string_to_key(DEFAULT_KEYBINDINGS[a])
+    while true
+        owner = Dict{Keyboard.Button,String}()
+        clash = nothing
+        for action in sort(collect(keys(bindings)))
+            other = get(owner, bindings[action], nothing)
+            other === nothing || (clash = (other, action); break)
+            owner[bindings[action]] = action
+        end
+        clash === nothing && return bindings
+        other, action = clash
+        moved = isdefault(action) ? other : action
+        @warn "Key '$(key_to_string(bindings[moved]))' is saved for both '$other' and " *
+              "'$action'; '$moved' goes back to its default '$(DEFAULT_KEYBINDINGS[moved])'"
+        bindings[moved] = string_to_key(DEFAULT_KEYBINDINGS[moved])
+    end
 end
 
 """
@@ -93,6 +127,7 @@ function load_keybindings!()
         key_str = @load_preference(action, default_key)
         KEYBINDINGS[action] = resolve_keybinding(action, key_str, default_key)
     end
+    separate_keybindings!(KEYBINDINGS)
     return nothing
 end
 
@@ -113,7 +148,12 @@ end
     set_keybinding!(action::String, key::String)
     set_keybinding!(action::Symbol, key::String)
 
-Set a keybinding for an action. Persists to LocalPreferences.toml.
+Set a keybinding for an action. It takes effect at once, in open viewers too, and persists to
+LocalPreferences.toml.
+
+Throws an `ArgumentError` for an unknown action or key, for a digit `1`-`9` (they pick display
+dims and toggle channels), and for a key already bound to another action (rebind that one
+first).
 
 # Example
 ```julia
@@ -122,18 +162,22 @@ SMLMView.set_keybinding!("pan_up", "w")
 ```
 """
 function set_keybinding!(action::String, key::String)
-    if !haskey(DEFAULT_KEYBINDINGS, action)
-        error("Unknown action '$action'. Valid actions: $(join(keys(DEFAULT_KEYBINDINGS), ", "))")
-    end
+    haskey(DEFAULT_KEYBINDINGS, action) || throw(ArgumentError(
+        "Unknown action '$action'. Valid actions: $(join(list_actions(), ", "))"))
 
     button = string_to_key(key)
-    if button == Keyboard.unknown
-        error("Unknown key '$key'. See SMLMView.list_keys() for valid keys.")
+    button == Keyboard.unknown && throw(ArgumentError(
+        "Unknown key '$key'. See SMLMView.list_keys() for valid keys."))
+    button in RESERVED_KEYS && throw(ArgumentError(
+        "Key '$key' is a digit; digits 1-9 pick display dims and toggle channels"))
+    for (other, b) in KEYBINDINGS
+        other != action && b == button && throw(ArgumentError(
+            "Key '$key' is already bound to '$other'; rebind '$other' first"))
     end
 
     @set_preferences!(action => key)
     KEYBINDINGS[action] = button
-    @info "Set $action => $key (restart Julia for full effect)"
+    @info "Set $action => $key"
     return nothing
 end
 

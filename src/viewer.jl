@@ -188,10 +188,11 @@ function smlmview(data::AbstractArray{T,N};
     end
 
     # One handler for every display-dims change (keys or `v.display_dims[] = ...`):
-    # sliders, slice, colorrange, figure and view all follow the new dims. It is the first
-    # listener, so an invalid pair is put back before anything else sees it.
+    # sliders, slice, colorrange, figure and view all follow the new dims. It runs first (the
+    # highest priority, registered first), so an invalid pair is put back before any other
+    # listener sees it.
     shown_dims = Ref(display_dims)
-    on(obs_display_dims) do dd
+    on(obs_display_dims; priority=typemax(Int)) do dd
         try
             check_display_dims(N, dd)
         catch
@@ -274,13 +275,20 @@ function smlmview(data::AbstractArray{T,N};
     hidedecorations!(ax)
     hidespines!(ax)
 
+    # Makie draws in Float32. The heatmap gets each value relative to the colorrange's low
+    # end, and the range as (0, hi - lo), so data whose range is narrow next to its magnitude
+    # keeps its contrast (1e9 and 1e9 + 1 are one Float32) and the range stays finite.
+    # `colorrange` in the returned handle stays in data units.
+    obs_drawn = lift((s, cr) -> s .- cr[1], obs_slice_data, obs_colorrange)
+    obs_drawn_range = lift(cr -> (0.0, cr[2] - cr[1]), obs_colorrange)
+
     # Display current slice as heatmap with explicit coordinates
     # Store reference for recreation when display_dims changes (WGLMakie texture resize issue)
     hm_ref = Ref{Any}(nothing)
 
     function create_heatmap!()
-        hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_slice_data;
-                           colorrange=obs_colorrange,
+        hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_drawn;
+                           colorrange=obs_drawn_range,
                            colormap=obs_colormap,
                            interpolate=false)
     end
@@ -548,6 +556,12 @@ function smlmview(data::AbstractArray{T,N};
 
     # Mouse hover tracking
     on(events(ax.scene).mouseposition) do _
+        update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
+                          obs_cursor_pos, obs_pixel_value, obs_in_bounds)
+    end
+
+    # Zoom, pan or reset move the image under a still mouse: read the pixel now under it
+    on(ax.finallimits) do _
         update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end

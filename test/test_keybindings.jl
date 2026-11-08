@@ -75,24 +75,73 @@ using SMLMView
     end
 
     @testset "set_keybinding! errors" begin
-        # Invalid action should error
-        @test_throws ErrorException set_keybinding!("invalid_action", "a")
+        # Invalid action or key
+        @test_throws ArgumentError set_keybinding!("invalid_action", "a")
+        @test_throws ArgumentError set_keybinding!("zoom_in", "invalid_key")
+        # A digit (it picks display dims and toggles channels) or another action's key
+        # could never fire; neither is accepted nor saved
+        @test_throws ArgumentError set_keybinding!(:zoom_in, "1")
+        @test_throws ArgumentError set_keybinding!(:zoom_in, "r")
+        @test get_keybindings()["zoom_in"] == "i"
+        @test SMLMView.Preferences.load_preference(SMLMView, "zoom_in") in (nothing, "i")
+    end
 
-        # Invalid key should error
-        @test_throws ErrorException set_keybinding!("zoom_in", "invalid_key")
+    # Run f with these saved preferences, then put back what was saved before.
+    function with_saved(f, prefs::Pair...)
+        P = SMLMView.Preferences
+        before = [a => P.load_preference(SMLMView, a) for (a, _) in prefs]
+        P.set_preferences!(SMLMView, prefs...; force=true)
+        try
+            f()
+        finally
+            for (a, old) in before
+                old === nothing ? P.delete_preferences!(SMLMView, a; force=true) :
+                    P.set_preferences!(SMLMView, a => old; force=true)
+            end
+            SMLMView.load_keybindings!()
+        end
     end
 
     @testset "an invalid saved key falls back to the default" begin
-        P = SMLMView.Preferences
-        saved = P.load_preference(SMLMView, "zoom_in")
-        P.set_preferences!(SMLMView, "zoom_in" => "notakey"; force=true)
-        try
+        with_saved("zoom_in" => "notakey") do
             @test_logs (:warn, r"'notakey'.*'i'") SMLMView.load_keybindings!()
             @test get_keybindings()["zoom_in"] == "i"
-        finally
-            saved === nothing ? P.delete_preferences!(SMLMView, "zoom_in"; force=true) :
-                P.set_preferences!(SMLMView, "zoom_in" => saved; force=true)
+        end
+        with_saved("zoom_in" => "1") do
+            @test_logs (:warn, r"'1'.*digit.*'i'") SMLMView.load_keybindings!()
+            @test get_keybindings()["zoom_in"] == "i"
+        end
+    end
+
+    @testset "saved keys that collide go back to their defaults" begin
+        # zoom_in on reset's key: zoom_in goes back to i, so reset keeps r
+        with_saved("zoom_in" => "r") do
+            @test_logs (:warn, r"'r'.*'reset'.*'zoom_in'") SMLMView.load_keybindings!()
+            b = get_keybindings()
+            @test b["zoom_in"] == "i" && b["reset"] == "r"
+        end
+        # a chain: zoom_in back to i then collides with pan_up's saved i, which goes back to e
+        with_saved("zoom_in" => "r", "pan_up" => "i") do
             SMLMView.load_keybindings!()
+            b = get_keybindings()
+            @test length(unique(values(b))) == length(b)
+            @test b["zoom_in"] == "i" && b["pan_up"] == "e" && b["reset"] == "r"
+        end
+    end
+
+    @testset "a rebound key works in a viewer" begin
+        K = SMLMView.Keyboard
+        v = smlmview(rand(8, 8); show=false)
+        set_keybinding!(:zoom_in, "k")
+        try
+            key = SMLMView.WGLMakie.Makie.KeyEvent
+            events = SMLMView.WGLMakie.Makie.events
+            events(v.fig).keyboardbutton[] = key(K.k, K.press)
+            @test v.view_zoom_idx[] == SMLMView.DEFAULT_ZOOM_IDX + 1
+            events(v.fig).keyboardbutton[] = key(K.i, K.press)
+            @test v.view_zoom_idx[] == SMLMView.DEFAULT_ZOOM_IDX + 1
+        finally
+            set_keybinding!(:zoom_in, "i")
         end
     end
 

@@ -113,13 +113,28 @@ function prepare_slice_nd(data::AbstractArray{T,N},
 end
 
 """
+    mouse_data_position(ax) -> (x, y)
+
+The mouse position in the axis's data coordinates, from the mouse pixel, the axis viewport
+and its current limits. Unlike `mouseposition(ax.scene)`, which reads the scene camera, it is
+already right inside a listener on `ax.finallimits` (the camera can lag the limits there).
+"""
+function mouse_data_position(ax)
+    mp = events(ax.scene).mouseposition[]
+    vp = ax.scene.viewport[]
+    lim = ax.finallimits[]
+    return (lim.origin[1] + (mp[1] - vp.origin[1]) / vp.widths[1] * lim.widths[1],
+            lim.origin[2] + (mp[2] - vp.origin[2]) / vp.widths[2] * lim.widths[2])
+end
+
+"""
 Update cursor position and pixel value from mouse position for ND data.
 """
 function update_cursor_nd!(ax, data::AbstractArray{T,N},
                            obs_display_dims, slice_indices,
                            obs_pos, obs_val, obs_in_bounds) where {T,N}
     try
-        mpos = mouseposition(ax.scene)
+        mpos = mouse_data_position(ax)
         if !isnothing(mpos)
             dd = obs_display_dims[]
             nrows = size(data, dd[1])
@@ -241,8 +256,10 @@ end
 Intensity range over the finite values of `data`. With `clip == (0, 1)` it is the exact
 minimum and maximum. Otherwise it is the `clip` quantiles, taken from every value when
 `data` has at most `max_samples` of them, and from every `step`-th value
-(`step = length(data) ÷ max_samples`) when it has more. Data with no finite value gives
-`(0.0, 1.0)`; a constant `c` gives `(c, c + max(1, 1e-6|c|))`.
+(`step = length(data) ÷ max_samples`) when it has more; if none of those samples is finite,
+it is the exact minimum and maximum. Data with no finite value gives `(0.0, 1.0)`; a
+constant `c` gives `(c, c + max(1, 1e-6|c|))`. (The gray viewer draws values relative to the
+range's low end, so the range stays drawable in Makie's Float32.)
 """
 function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{Real,Real};
                                      max_samples::Int=1_000_000)
@@ -268,8 +285,7 @@ function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{R
         lo, hi = quantile(samples, (clip[1], clip[2]))
     end
 
-    # A range Makie can draw: hi above lo, also after Makie converts both to Float32
-    # (lo + 1 == lo from |lo| > 2^53 on, and in Float32 from 2^24 on)
+    # hi above lo, also where lo + 1 == lo (|lo| > 2^53)
     if !(lo < hi)
         hi = lo + max(1.0, 1e-6 * abs(lo))
     end
