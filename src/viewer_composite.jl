@@ -39,6 +39,11 @@ ch2 = rand(256, 256, 10)  # "GFP"
 ch3 = rand(256, 256, 10)  # "Alexa647"
 v = smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 ```
+
+# Notes
+- Intensities are computed in Float64 and blended as colors in Float64. Values that are equal
+  in Float64 draw alike: integers beyond 2^53 closer than their Float64 spacing, and under the
+  log mapping, differences at Float64's subnormal scale (below about 1e-308).
 """
 function smlmview(channels::Tuple{Vararg{AbstractArray}};
                   colors::Union{Nothing, Tuple}=nothing,

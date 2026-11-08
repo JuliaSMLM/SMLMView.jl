@@ -472,6 +472,25 @@ end
         end
         @test SMLMView.log_value(F, -F) ≈ log10(2) + log10(F)  # 1 + 2F, without overflow
         @test SMLMView.log_value(1e-50, 0.0) ≈ 1e-50 / log(10)  # log1p keeps it
+        # tiny Float32 and Float16 data: the gray buffer is Float64, so log values below
+        # Float32's range are not rounded to zero before they are normalized
+        for x in (Float32[0 nextfloat(0f0); 0 nextfloat(0f0)], Float16[0 nextfloat(Float16(0)); 0 nextfloat(Float16(0))])
+            v = smlmview(x; show=false)
+            v.mapping_idx[] = 2
+            for stretch in (1, 2)
+                v.stretch_idx[] = stretch
+                @test extrema(v.ax.scene.plots[end][3][]) == (0, 1)
+            end
+        end
+        # The documented Float64 contract: values equal in Float64 draw alike (finite, one level)
+        for x in ([typemax(UInt64)-UInt64(1) typemax(UInt64); typemax(UInt64)-UInt64(1) typemax(UInt64)],
+                  [0.0 nextfloat(0.0); 0.0 nextfloat(0.0)])
+            v = smlmview(x; show=false)
+            v.mapping_idx[] = 2
+            d = v.ax.scene.plots[end][3][]
+            @test all(isfinite, d)
+            @test length(unique(d)) == 1  # see the Notes in the smlmview docstring
+        end
         # constants, also where c + w is beyond Float32 or Float64
         for c in (1e40, 1e50, floatmax(Float64))
             lo, hi = SMLMView.compute_colorrange_sampled(fill(c, 2, 2), (0.0, 1.0))

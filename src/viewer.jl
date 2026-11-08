@@ -58,6 +58,11 @@ v = smlmview(data4d; display_dims=(1, 3), dim_names=("Y", "X", "Z", "T"))
 ```
 
 # Notes
+- Intensities are computed in Float64, and Makie draws them normalized to the colorrange, so
+  its Float32 drawing loses nothing more. Values that are equal in Float64 draw alike:
+  integers beyond 2^53 closer than their Float64 spacing (`typemax(UInt64) - 1` and
+  `typemax(UInt64)` are one Float64), and the log mapping keeps no contrast at Float64's
+  subnormal scale (differences below about 1e-308).
 - Data is displayed with standard image orientation: row 1 at top, col 1 at left
 - Status bar shows current display dims: (1,2) means dim1→rows, dim2→cols
 - For N-dim data, N-2 sliders are created for non-display dimensions
@@ -127,8 +132,10 @@ function smlmview(data::AbstractArray{T,N};
     obs_view_center = Observable((0.0, 0.0))  # Will be set by reset_view!
 
     # Current slice data - reactive to display_dims and slice_indices.
-    # Floating-point element type, so the log mapping's values fit integer data too.
-    obs_slice_data = Observable{Matrix{float(T)}}(prepare_slice_nd(data, display_dims, slice_indices))
+    # Float64 whatever the data's type: the log mapping's values fit integer data too, and
+    # no value is narrowed before it is normalized for drawing (a Float32 buffer rounded
+    # log values of tiny Float32 data to zero).
+    obs_slice_data = Observable{Matrix{Float64}}(prepare_slice_nd(data, display_dims, slice_indices))
 
     # Coordinate observables - must update when display_dims changes
     # These ensure heatmap coordinate grid matches data shape
