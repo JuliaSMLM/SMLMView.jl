@@ -175,9 +175,28 @@ function set_keybinding!(action::String, key::String)
             "Key '$key' is already bound to '$other'; rebind '$other' first"))
     end
 
-    @set_preferences!(action => key)
     KEYBINDINGS[action] = button
+    save_keybindings!()
     @info "Set $action => $key"
+    return nothing
+end
+
+"""
+    save_keybindings!()
+
+Make the saved preferences the bindings in effect: an action on its default key has no saved
+preference, every other action has its key saved. So a saved binding that loading put back
+to its default (a digit, a collision, an unknown name) never returns at the next load.
+"""
+function save_keybindings!()
+    for (action, default_key) in DEFAULT_KEYBINDINGS
+        button = KEYBINDINGS[action]
+        if button == string_to_key(default_key)
+            @delete_preferences!(action)
+        else
+            @set_preferences!(action => key_to_string(button))
+        end
+    end
     return nothing
 end
 
@@ -200,10 +219,11 @@ end
 """
     list_keys() -> Vector{String}
 
-List all valid key names for keybindings.
+List all key names an action can be bound to (every known key but the digits 1-9, which pick
+display dims and toggle channels).
 """
 function list_keys()
-    return sort(collect(keys(KEY_MAP)))
+    return sort([k for (k, b) in KEY_MAP if !(b in RESERVED_KEYS)])
 end
 
 """

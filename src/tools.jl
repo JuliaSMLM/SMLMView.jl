@@ -113,18 +113,50 @@ function prepare_slice_nd(data::AbstractArray{T,N},
 end
 
 """
-    mouse_data_position(ax) -> (x, y)
+    mouse_data_position(ax) -> (x, y) or nothing
 
-The mouse position in the axis's data coordinates, from the mouse pixel, the axis viewport
-and its current limits. Unlike `mouseposition(ax.scene)`, which reads the scene camera, it is
-already right inside a listener on `ax.finallimits` (the camera can lag the limits there).
+The mouse position in the axis's data coordinates, from the mouse pixel, the axis viewport,
+its current limits, scales and reversal; `nothing` when the mouse is outside the viewport
+(or the viewport has no size yet). Unlike `mouseposition(ax.scene)`, which reads the scene
+camera, it is already right inside a listener on `ax.finallimits` (the camera can lag the
+limits there).
 """
 function mouse_data_position(ax)
     mp = events(ax.scene).mouseposition[]
     vp = ax.scene.viewport[]
+    all(>(0), vp.widths) || return nothing
+    fx = (mp[1] - vp.origin[1]) / vp.widths[1]
+    fy = (mp[2] - vp.origin[2]) / vp.widths[2]
+    (0 <= fx <= 1 && 0 <= fy <= 1) || return nothing
     lim = ax.finallimits[]
-    return (lim.origin[1] + (mp[1] - vp.origin[1]) / vp.widths[1] * lim.widths[1],
-            lim.origin[2] + (mp[2] - vp.origin[2]) / vp.widths[2] * lim.widths[2])
+    return (axis_coordinate(fx, lim.origin[1], lim.widths[1], ax.xscale[], ax.xreversed[]),
+            axis_coordinate(fy, lim.origin[2], lim.widths[2], ax.yscale[], ax.yreversed[]))
+end
+
+# The data coordinate at fraction `frac` across an axis from `lo` to `lo + w`, drawn through
+# `scale` (identity, log10, ...) and possibly reversed.
+function axis_coordinate(frac, lo, w, scale, reversed::Bool)
+    reversed && (frac = 1 - frac)
+    scale === identity && return lo + frac * w
+    a, b = scale(lo), scale(lo + w)
+    return Makie.inverse_transform(scale)(a + frac * (b - a))
+end
+
+"""
+    normalize_to_range(values, (lo, hi)) -> Array{Float64}
+
+`(values - lo) / (hi - lo)`, clamped to [-1, 2]: the colorrange becomes (0, 1) and every
+value stays finite in Float32 (Makie draws in Float32), whatever the magnitude or width of
+the range; a value beyond the range stays beyond it. NaN stays NaN.
+"""
+function normalize_to_range(values::AbstractArray, crange::Tuple{Real,Real})
+    lo, hi = widen_range(Float64(crange[1]), Float64(crange[2]))  # never a zero span
+    span = hi - lo
+    if isfinite(span)
+        return clamp.((values .- lo) ./ span, -1.0, 2.0)
+    end
+    # a span beyond Float64 (lo near -floatmax, hi near floatmax): halve everything first
+    return clamp.((values ./ 2 .- lo / 2) ./ (hi / 2 - lo / 2), -1.0, 2.0)
 end
 
 """
@@ -135,7 +167,9 @@ function update_cursor_nd!(ax, data::AbstractArray{T,N},
                            obs_pos, obs_val, obs_in_bounds) where {T,N}
     try
         mpos = mouse_data_position(ax)
-        if !isnothing(mpos)
+        if isnothing(mpos)
+            obs_in_bounds[] = false
+        else
             dd = obs_display_dims[]
             nrows = size(data, dd[1])
             ncols = size(data, dd[2])
@@ -199,10 +233,24 @@ log_values(slice::AbstractArray, offset::Real) = log10.(max.(float.(slice) .- of
 """
     log_range((lo, hi), offset) -> (Float64, Float64)
 
-The colorrange `(lo, hi)` on the same log scale as `log_values(slice, offset)`.
+The colorrange `(lo, hi)` on the same log scale as `log_values(slice, offset)`. A range that
+collapses there (a span below eps next to 1, as `log10(1 + 1e-50) == 0`) is widened as
+`compute_colorrange_sampled` widens a constant.
 """
 log_range(crange::Tuple{Real,Real}, offset::Real) =
-    (log10(max(crange[1] - offset + 1, 1.0)), log10(max(crange[2] - offset + 1, 1.0)))
+    widen_range(log10(max(crange[1] - offset + 1, 1.0)), log10(max(crange[2] - offset + 1, 1.0)))
+
+"""
+    widen_range(lo, hi) -> (lo, hi)
+
+`(lo, hi)` unchanged when `lo < hi`; otherwise `(lo, lo + w)` with `w = max(1, 1e-6|lo|)`,
+or `(lo - w, lo)` where `lo + w` overflows.
+"""
+function widen_range(lo::Float64, hi::Float64)
+    lo < hi && return (lo, hi)
+    w = max(1.0, 1e-6 * abs(lo))
+    return isfinite(lo + w) ? (lo, lo + w) : (lo - w, lo)
+end
 
 """
     check_viewable(data, what="data")
@@ -258,8 +306,9 @@ minimum and maximum. Otherwise it is the `clip` quantiles, taken from every valu
 `data` has at most `max_samples` of them, and from every `step`-th value
 (`step = length(data) ÷ max_samples`) when it has more; if none of those samples is finite,
 it is the exact minimum and maximum. Data with no finite value gives `(0.0, 1.0)`; a
-constant `c` gives `(c, c + max(1, 1e-6|c|))`. (The gray viewer draws values relative to the
-range's low end, so the range stays drawable in Makie's Float32.)
+constant `c` gives `(c, c + w)` with `w = max(1, 1e-6|c|)` (`(c - w, c)` where `c + w`
+overflows). Both viewers draw values normalized to this range (`normalize_to_range`), so any
+range stays drawable in Makie's Float32.
 """
 function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{Real,Real};
                                      max_samples::Int=1_000_000)
@@ -285,10 +334,6 @@ function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{R
         lo, hi = quantile(samples, (clip[1], clip[2]))
     end
 
-    # hi above lo, also where lo + 1 == lo (|lo| > 2^53)
-    if !(lo < hi)
-        hi = lo + max(1.0, 1e-6 * abs(lo))
-    end
-
-    return (Float64(lo), Float64(hi))
+    # hi above lo, also where lo + 1 == lo (|lo| > 2^53); near floatmax, widen downward
+    return widen_range(Float64(lo), Float64(hi))
 end

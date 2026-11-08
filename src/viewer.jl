@@ -275,12 +275,12 @@ function smlmview(data::AbstractArray{T,N};
     hidedecorations!(ax)
     hidespines!(ax)
 
-    # Makie draws in Float32. The heatmap gets each value relative to the colorrange's low
-    # end, and the range as (0, hi - lo), so data whose range is narrow next to its magnitude
-    # keeps its contrast (1e9 and 1e9 + 1 are one Float32) and the range stays finite.
-    # `colorrange` in the returned handle stays in data units.
-    obs_drawn = lift((s, cr) -> s .- cr[1], obs_slice_data, obs_colorrange)
-    obs_drawn_range = lift(cr -> (0.0, cr[2] - cr[1]), obs_colorrange)
+    # Makie draws in Float32. The heatmap gets each value normalized to the colorrange
+    # (normalize_to_range), and the range as (0, 1), so any range stays drawable: a narrow one
+    # next to its magnitude (1e9 and 1e9 + 1 are one Float32), a tiny one (1e-50) or a huge
+    # one (1e40). `colorrange` in the returned handle stays in data units.
+    obs_drawn = lift(normalize_to_range, obs_slice_data, obs_colorrange)
+    obs_drawn_range = Observable((0.0, 1.0))
 
     # Display current slice as heatmap with explicit coordinates
     # Store reference for recreation when display_dims changes (WGLMakie texture resize issue)
@@ -560,9 +560,10 @@ function smlmview(data::AbstractArray{T,N};
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
 
-    # Zoom, pan, reset or a resized figure move the image under a still mouse: read the
-    # pixel now under it (a resize can change the viewport and leave the limits as they are)
-    onany(ax.finallimits, ax.scene.viewport) do _, _
+    # Zoom, pan, reset, a resized figure or a reversed axis move the image under a still
+    # mouse: read the pixel now under it (a resize can change the viewport and leave the
+    # limits as they are)
+    onany(ax.finallimits, ax.scene.viewport, ax.xreversed, ax.yreversed, ax.xscale, ax.yscale) do _...
         update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end

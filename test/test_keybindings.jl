@@ -12,7 +12,7 @@ using SMLMView
         @test "a" in keys
         @test "z" in keys
         @test "0" in keys
-        @test "9" in keys
+        @test !("9" in keys)  # digits 1-9 pick display dims and toggle channels
         @test "space" in keys
         @test "enter" in keys
     end
@@ -86,10 +86,11 @@ using SMLMView
         @test SMLMView.Preferences.load_preference(SMLMView, "zoom_in") in (nothing, "i")
     end
 
-    # Run f with these saved preferences, then put back what was saved before.
+    # Run f with these saved preferences, then put back every action's saved preference as
+    # it was before (f may save others through set_keybinding!).
     function with_saved(f, prefs::Pair...)
         P = SMLMView.Preferences
-        before = [a => P.load_preference(SMLMView, a) for (a, _) in prefs]
+        before = [a => P.load_preference(SMLMView, a) for a in list_actions()]
         P.set_preferences!(SMLMView, prefs...; force=true)
         try
             f()
@@ -126,6 +127,22 @@ using SMLMView
             b = get_keybindings()
             @test length(unique(values(b))) == length(b)
             @test b["zoom_in"] == "i" && b["pan_up"] == "e" && b["reset"] == "r"
+        end
+    end
+
+    @testset "the saved bindings are the ones in effect after a change" begin
+        # a collision saved before set_keybinding! refused them: reset on zoom_in's key
+        with_saved("reset" => "i") do
+            @test_logs (:warn, r"'reset'") SMLMView.load_keybindings!()
+            @test get_keybindings()["reset"] == "r"
+            set_keybinding!(:zoom_in, "k")
+            set_keybinding!(:zoom_out, "i")
+            P = SMLMView.Preferences
+            @test P.load_preference(SMLMView, "reset") === nothing  # the repaired one is gone
+            @test P.load_preference(SMLMView, "zoom_out") == "i"
+            SMLMView.load_keybindings!()  # as at the next start
+            b = get_keybindings()
+            @test (b["reset"], b["zoom_in"], b["zoom_out"]) == ("r", "k", "i")
         end
     end
 

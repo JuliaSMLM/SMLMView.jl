@@ -34,11 +34,12 @@ function hover!(v, row, col, nrows)
 end
 
 # The matrix the heatmap draws (before colorrange), in display orientation and data units.
-# The viewer draws values relative to the colorrange's low end (Makie draws in Float32), so
-# add back the shift between the handle's range and the plot's own.
+# The viewer draws values normalized to the colorrange (Makie draws in Float32), so map the
+# plot's own range back onto the handle's.
 function drawn(v)
     hm = v.ax.scene.plots[end]
-    return Float32.(hm[3][] .+ (v.colorrange[][1] - hm.colorrange[][1]))
+    (lo, hi), (plo, phi) = v.colorrange[], hm.colorrange[]
+    return Float32.(lo .+ (hm[3][] .- plo) ./ (phi - plo) .* (hi - lo))
 end
 
 plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
@@ -444,16 +445,74 @@ end
         end
     end
 
-    @testset "data with a range narrow next to its magnitude keeps its contrast" begin
-        v = smlmview([1e9 1e9+1; 1e9 1e9+1]; show=false)
-        @test v.colorrange[] == (1e9, 1e9 + 1)
-        hm = v.ax.scene.plots[end]
-        @test sort(unique(hm[3][])) == [0, 1]       # drawn as Float32, still two levels
-        @test collect(hm.colorrange[]) == [0, 1]
-        v = smlmview(fill(1e40, 2, 2); show=false)  # beyond Float32's range
-        hm = v.ax.scene.plots[end]
-        @test all(isfinite, hm[3][])
-        @test all(isfinite, hm.colorrange[]) && hm.colorrange[][1] < hm.colorrange[][2]
+    @testset "any range stays drawable in Float32" begin
+        # narrow next to its magnitude, huge, tiny: two levels each, drawn as 0 and 1
+        for x in ([1e9 1e9+1; 1e9 1e9+1], [1e40 2e40; 1e40 2e40], [0.0 1e-50; 0.0 1e-50])
+            v = smlmview(x; show=false)
+            @test v.colorrange[] == extrema(x)       # the handle keeps data units
+            for k in 1:5  # through the mapping and stretch cycles
+                hm = v.ax.scene.plots[end]
+                @test all(isfinite, hm[3][])
+                # log10(x - min + 1) of a span below eps is one level already in Float64
+                flatlog = v.mapping[].transform == :log && maximum(x) - minimum(x) < eps()
+                @test length(unique(hm[3][])) == (flatlog ? 1 : 2)
+                @test collect(hm.colorrange[]) == [0, 1]
+                action!(v.fig, isodd(k) ? "mapping_cycle" : "stretch_cycle")
+            end
+        end
+        # constants, also where c + w is beyond Float32 or Float64
+        for c in (1e40, 1e50, floatmax(Float64))
+            lo, hi = SMLMView.compute_colorrange_sampled(fill(c, 2, 2), (0.0, 1.0))
+            @test isfinite(lo) && isfinite(hi) && lo < hi
+            hm = smlmview(fill(c, 2, 2); show=false).ax.scene.plots[end]
+            @test all(isfinite, hm[3][]) && collect(hm.colorrange[]) == [0, 1]
+        end
+        c = smlmview(([1e40 2e40; 1e40 2e40], [0.0 1e-50; 0.0 1e-50]); show=false)
+        @test all(p -> all(isfinite, (red(p), green(p), blue(p))), c.rgb[])
+        @test length(unique(c.rgb[])) == 2
+    end
+
+    @testset "no readout with the mouse outside the image" begin
+        a = Float64[100i + j for i in 1:20, j in 1:20]
+        for v in (smlmview(a; show=false), smlmview((a, 2 .* a); show=false))
+            hover!(v, 5, 5, 20)
+            action!(v.fig, "zoom_in")
+            @test v.cursor_pos[] == (8, 8)
+            vp = v.ax.scene.viewport[]
+            # one pixel above the axis, at 45% of its width
+            @test all(>(0), vp.widths)  # the viewport is laid out
+            events(v.fig).mouseposition[] = (vp.origin[1] + 0.45 * vp.widths[1], vp.origin[2] + vp.widths[2] + 1)
+            @test startswith(status(v.fig), "---")
+            # and one pixel left of it, after a resize
+            resize!(v.fig, 400, 360)
+            vp = v.ax.scene.viewport[]
+            events(v.fig).mouseposition[] = (vp.origin[1] - 1, vp.origin[2] + vp.widths[2] / 2)
+            @test startswith(status(v.fig), "---")
+        end
+    end
+
+    @testset "readout on reversed axes matches Makie's own mapping" begin
+        a = Float64[100i + j for i in 1:20, j in 1:20]
+        for v in (smlmview(a; show=false), smlmview((a, 2 .* a); show=false))
+            value() = haskey(v, :pixel_value) ? v.pixel_value[] : v.pixel_values[][1]
+            # Makie's settled mapping of the mouse, as (row, col)
+            makie_pixel() = (p = Makie.mouseposition(v.ax.scene);
+                             (20 - round(Int, p[2]) + 1, round(Int, p[1])))
+            hover!(v, 5, 5, 20)
+            @test v.cursor_pos[] == (5, 5)
+            v.ax.xreversed[] = true      # column 16 is now drawn under the mouse
+            @test v.cursor_pos[] == (5, 16) == makie_pixel()
+            @test value() == 516
+            v.ax.yreversed[] = true
+            @test v.cursor_pos[] == (16, 16) == makie_pixel()
+            action!(v.fig, "zoom_in")
+            @test v.cursor_pos[] == makie_pixel()
+            @test value() == a[v.cursor_pos[]...]
+            v.ax.xreversed[] = false
+            v.ax.yreversed[] = false
+            action!(v.fig, "reset")
+            @test v.cursor_pos[] == (5, 5) == makie_pixel()
+        end
     end
 
     @testset "no listener sees an invalid display_dims pair" begin

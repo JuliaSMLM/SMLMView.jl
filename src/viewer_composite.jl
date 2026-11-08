@@ -138,11 +138,9 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
         return m
     end
 
-    # Normalize a slice to 0-1 given colorrange
-    function normalize_slice(slice::AbstractMatrix, crange::Tuple{Float64, Float64})
-        lo, hi = crange
-        return clamp.((slice .- lo) ./ (hi - lo), 0.0, 1.0)
-    end
+    # Normalize a slice to 0-1 given colorrange (any finite range, however wide or narrow)
+    normalize_slice(slice::AbstractMatrix, crange::Tuple{Float64, Float64}) =
+        clamp.(normalize_to_range(slice, crange), 0.0, 1.0)
 
     # Composite channels into RGB matrix
     function composite_rgb()
@@ -516,7 +514,9 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
     function update_cursor_composite!()
         try
             mpos = mouse_data_position(ax)
-            if !isnothing(mpos)
+            if isnothing(mpos)
+                obs_in_bounds[] = false
+            else
                 dd = obs_display_dims[]
                 nrows = data_size[dd[1]]
                 ncols = data_size[dd[2]]
@@ -556,9 +556,11 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
     # Mouse hover
     on(_ -> update_cursor_composite!(), events(ax.scene).mouseposition)
 
-    # Zoom, pan, reset or a resized figure move the image under a still mouse: read the
-    # pixel now under it (a resize can change the viewport and leave the limits as they are)
-    onany((_, _) -> update_cursor_composite!(), ax.finallimits, ax.scene.viewport)
+    # Zoom, pan, reset, a resized figure or a reversed axis move the image under a still
+    # mouse: read the pixel now under it (a resize can change the viewport and leave the
+    # limits as they are)
+    onany((_...) -> update_cursor_composite!(), ax.finallimits, ax.scene.viewport,
+          ax.xreversed, ax.yreversed, ax.xscale, ax.yscale)
 
     # Slice change (keyboard or slider) with the mouse held still
     for idx_obs in slice_indices
