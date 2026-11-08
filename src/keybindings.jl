@@ -184,15 +184,17 @@ end
 """
     save_keybindings!()
 
-Make the saved preferences the bindings in effect: an action on its default key has no saved
-preference, every other action has its key saved. So a saved binding that loading put back
-to its default (a digit, a collision, an unknown name) never returns at the next load.
+Make the saved preferences the bindings in effect: an action on its default key has its
+saved preference cleared, and any inherited (another environment on the load path) or
+exported (Project.toml) one blocked; every other action has its key saved. So a binding that
+loading put back to its default (a digit, a collision, an unknown name) never returns at the
+next load.
 """
 function save_keybindings!()
     for (action, default_key) in DEFAULT_KEYBINDINGS
         button = KEYBINDINGS[action]
         if button == string_to_key(default_key)
-            @delete_preferences!(action)
+            @set_preferences!(action => nothing)  # `nothing` clears and blocks inheritance
         else
             @set_preferences!(action => key_to_string(button))
         end
@@ -205,11 +207,12 @@ set_keybinding!(action::Symbol, key::String) = set_keybinding!(String(action), k
 """
     reset_keybindings!()
 
-Reset all keybindings to defaults. Clears preferences.
+Reset all keybindings to defaults. Clears the saved preferences, and blocks any inherited
+from another environment on the load path or exported in Project.toml, so the defaults hold.
 """
 function reset_keybindings!()
     for action in keys(DEFAULT_KEYBINDINGS)
-        @delete_preferences!(action)
+        @set_preferences!(action => nothing)  # `nothing` clears and blocks inheritance
     end
     load_keybindings!()
     @info "Keybindings reset to defaults"

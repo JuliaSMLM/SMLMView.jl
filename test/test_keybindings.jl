@@ -86,19 +86,16 @@ using SMLMView
         @test SMLMView.Preferences.load_preference(SMLMView, "zoom_in") in (nothing, "i")
     end
 
-    # Run f with these saved preferences, then put back every action's saved preference as
-    # it was before (f may save others through set_keybinding!).
+    # Run f with these saved preferences, then put the active project's LocalPreferences.toml
+    # back exactly as it was (f may save others through set_keybinding!).
     function with_saved(f, prefs::Pair...)
-        P = SMLMView.Preferences
-        before = [a => P.load_preference(SMLMView, a) for a in list_actions()]
-        P.set_preferences!(SMLMView, prefs...; force=true)
+        path = joinpath(dirname(Base.active_project()), "LocalPreferences.toml")
+        before = isfile(path) ? read(path, String) : nothing
+        isempty(prefs) || SMLMView.Preferences.set_preferences!(SMLMView, prefs...; force=true)
         try
             f()
         finally
-            for (a, old) in before
-                old === nothing ? P.delete_preferences!(SMLMView, a; force=true) :
-                    P.set_preferences!(SMLMView, a => old; force=true)
-            end
+            before === nothing ? rm(path; force=true) : write(path, before)
             SMLMView.load_keybindings!()
         end
     end
@@ -143,6 +140,37 @@ using SMLMView
             SMLMView.load_keybindings!()  # as at the next start
             b = get_keybindings()
             @test (b["reset"], b["zoom_in"], b["zoom_out"]) == ("r", "k", "i")
+        end
+    end
+
+    @testset "a default saved or reset holds over an inherited preference" begin
+        # Another environment on the load path saves zoom_in = "k" (an inherited preference)
+        parent = mktempdir()
+        write(joinpath(parent, "Project.toml"),
+              "[deps]\nSMLMView = \"$(Base.PkgId(SMLMView).uuid)\"\n")
+        write(joinpath(parent, "LocalPreferences.toml"), "[SMLMView]\nzoom_in = \"k\"\n")
+        push!(LOAD_PATH, parent)
+        try
+            # `missing` lifts any local setting or block of zoom_in left by earlier tests
+            with_saved("zoom_in" => missing) do
+                SMLMView.load_keybindings!()
+                @test get_keybindings()["zoom_in"] == "k"  # inherited
+                set_keybinding!(:zoom_in, "i")              # back to the default
+                SMLMView.load_keybindings!()                # as at the next start
+                @test get_keybindings()["zoom_in"] == "i"
+            end
+            with_saved("zoom_in" => missing) do
+                SMLMView.load_keybindings!()
+                @test get_keybindings()["zoom_in"] == "k"
+                reset_keybindings!()
+                @test get_keybindings()["zoom_in"] == "i"
+                SMLMView.load_keybindings!()
+                @test get_keybindings()["zoom_in"] == "i"
+            end
+        finally
+            pop!(LOAD_PATH)
+            rm(parent; recursive=true, force=true)
+            SMLMView.load_keybindings!()
         end
     end
 

@@ -171,7 +171,7 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         v = smlmview(w; show=false)
         v.mapping_idx[] = 2
         @test sort(vec(drawn(v))) ≈ sort(vec(log10.(Float64.(w) .+ 20001)))
-        @test v.colorrange[] == (0.0, log10(40001))
+        @test collect(v.colorrange[]) ≈ [0.0, log10(40001)]
         c = smlmview((w, w); show=false)
         c.mapping_idx[] = 2
         @test all(isfinite, red.(c.rgb[]) .+ green.(c.rgb[]) .+ blue.(c.rgb[]))
@@ -446,20 +446,32 @@ end
     end
 
     @testset "any range stays drawable in Float32" begin
-        # narrow next to its magnitude, huge, tiny: two levels each, drawn as 0 and 1
-        for x in ([1e9 1e9+1; 1e9 1e9+1], [1e40 2e40; 1e40 2e40], [0.0 1e-50; 0.0 1e-50])
+        # narrow next to its magnitude, huge, tiny, and the whole Float64 range: every level
+        # stays its own, the lowest drawn at 0 and the highest at 1, in every mapping and stretch
+        F = floatmax(Float64)
+        for x in ([1e9 1e9+1; 1e9 1e9+1], [1e40 2e40; 1e40 2e40], [0.0 1e-50; 0.0 1e-50], [-F 0.0; 0.0 F])
             v = smlmview(x; show=false)
             @test v.colorrange[] == extrema(x)       # the handle keeps data units
             for k in 1:5  # through the mapping and stretch cycles
                 hm = v.ax.scene.plots[end]
-                @test all(isfinite, hm[3][])
-                # log10(x - min + 1) of a span below eps is one level already in Float64
-                flatlog = v.mapping[].transform == :log && maximum(x) - minimum(x) < eps()
-                @test length(unique(hm[3][])) == (flatlog ? 1 : 2)
+                d = hm[3][]
+                @test all(isfinite, d)
+                @test length(unique(d)) == length(unique(x))
+                if v.mapping[].clip == (0.0, 1.0)    # full range: the extremes are its ends
+                    @test extrema(d) == (0, 1)
+                end
                 @test collect(hm.colorrange[]) == [0, 1]
                 action!(v.fig, isodd(k) ? "mapping_cycle" : "stretch_cycle")
             end
+            c = smlmview((x, x); show=false)
+            for k in 1:5
+                @test all(p -> all(isfinite, (red(p), green(p), blue(p))), c.rgb[])
+                @test length(unique(c.rgb[])) == length(unique(x))
+                action!(c.fig, isodd(k) ? "mapping_cycle" : "stretch_cycle")
+            end
         end
+        @test SMLMView.log_value(F, -F) ≈ log10(2) + log10(F)  # 1 + 2F, without overflow
+        @test SMLMView.log_value(1e-50, 0.0) ≈ 1e-50 / log(10)  # log1p keeps it
         # constants, also where c + w is beyond Float32 or Float64
         for c in (1e40, 1e50, floatmax(Float64))
             lo, hi = SMLMView.compute_colorrange_sampled(fill(c, 2, 2), (0.0, 1.0))

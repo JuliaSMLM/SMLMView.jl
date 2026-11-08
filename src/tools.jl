@@ -222,23 +222,42 @@ function finite_minimum(data::AbstractArray{<:Number})
 end
 
 """
-    log_values(slice, offset) -> Matrix
+    log_value(x, offset) -> Float64
 
-The log mapping's drawn values, `log10(x - offset + 1)`, computed in floating point (an
-integer difference could wrap). A value below `offset` (a -Inf pixel, or data changed in
-place below a cached minimum) maps to 0, the bottom of the range; NaN stays NaN.
+The log mapping of one value, `log10(x - offset + 1)`, in Float64 (an integer difference
+could wrap) and without losing what Float64 holds: `log1p` keeps a difference far below 1
+(`log10(1 + 1e-50)` would be 0), and a difference beyond Float64 (`x - offset` from
+`-floatmax` to `floatmax`) is halved first. A value below `offset` (a -Inf pixel, or data
+changed in place below a cached minimum) maps to 0, the bottom of the range; NaN stays NaN
+and +Inf gives Inf.
 """
-log_values(slice::AbstractArray, offset::Real) = log10.(max.(float.(slice) .- offset .+ 1, 1))
+function log_value(x::Real, offset::Float64)
+    v = Float64(x)
+    d = v - offset
+    isfinite(d) && return log1p(max(d, 0.0)) / log(10.0)
+    isnan(d) && return NaN
+    d < 0 && return 0.0
+    isfinite(v) || return Inf
+    # 1 + d = 2 (d/2 + 1/2), with d/2 = v/2 - offset/2 finite
+    return log10(2.0) + log10(v / 2 - offset / 2 + 0.5)
+end
+
+"""
+    log_values(slice, offset) -> Array{Float64}
+
+The log mapping's drawn values, `log_value` of each value of `slice`.
+"""
+log_values(slice::AbstractArray, offset::Real) = log_value.(slice, Float64(offset))
 
 """
     log_range((lo, hi), offset) -> (Float64, Float64)
 
-The colorrange `(lo, hi)` on the same log scale as `log_values(slice, offset)`. A range that
-collapses there (a span below eps next to 1, as `log10(1 + 1e-50) == 0`) is widened as
-`compute_colorrange_sampled` widens a constant.
+The colorrange `(lo, hi)` on the same log scale as `log_values(slice, offset)`, through the
+same `log_value`. A range that still collapses (a constant) is widened as
+`compute_colorrange_sampled` widens one.
 """
 log_range(crange::Tuple{Real,Real}, offset::Real) =
-    widen_range(log10(max(crange[1] - offset + 1, 1.0)), log10(max(crange[2] - offset + 1, 1.0)))
+    widen_range(log_value(crange[1], Float64(offset)), log_value(crange[2], Float64(offset)))
 
 """
     widen_range(lo, hi) -> (lo, hi)
