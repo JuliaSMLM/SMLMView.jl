@@ -560,8 +560,9 @@ function smlmview(data::AbstractArray{T,N};
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
 
-    # Zoom, pan or reset move the image under a still mouse: read the pixel now under it
-    on(ax.finallimits) do _
+    # Zoom, pan, reset or a resized figure move the image under a still mouse: read the
+    # pixel now under it (a resize can change the viewport and leave the limits as they are)
+    onany(ax.finallimits, ax.scene.viewport) do _, _
         update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end

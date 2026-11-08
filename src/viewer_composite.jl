@@ -556,8 +556,9 @@ function smlmview(channels::Tuple{Vararg{AbstractArray}};
     # Mouse hover
     on(_ -> update_cursor_composite!(), events(ax.scene).mouseposition)
 
-    # Zoom, pan or reset move the image under a still mouse: read the pixel now under it
-    on(_ -> update_cursor_composite!(), ax.finallimits)
+    # Zoom, pan, reset or a resized figure move the image under a still mouse: read the
+    # pixel now under it (a resize can change the viewport and leave the limits as they are)
+    onany((_, _) -> update_cursor_composite!(), ax.finallimits, ax.scene.viewport)
 
     # Slice change (keyboard or slider) with the mouse held still
     for idx_obs in slice_indices

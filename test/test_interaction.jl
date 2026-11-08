@@ -428,6 +428,19 @@ end
             action!(v.fig, "reset")
             @test v.cursor_pos[] == (5, 5)
             @test value() == 505
+            # a resized figure moves the image under the mouse while the limits stay
+            hover!(v, 18, 3, 20)
+            @test v.cursor_pos[] == (18, 3)
+            lim0 = v.ax.finallimits[]
+            resize!(v.fig, 400, 360)
+            @test v.ax.finallimits[] == lim0
+            vp = v.ax.scene.viewport[]
+            mp = events(v.fig).mouseposition[]
+            col = round(Int, lim0.origin[1] + (mp[1] - vp.origin[1]) / vp.widths[1] * lim0.widths[1])
+            row = 20 - round(Int, lim0.origin[2] + (mp[2] - vp.origin[2]) / vp.widths[2] * lim0.widths[2]) + 1
+            @test 1 <= row <= 20 && 1 <= col <= 20 && (row, col) != (18, 3)
+            @test v.cursor_pos[] == (row, col)
+            @test value() == a[row, col]
         end
     end
 
