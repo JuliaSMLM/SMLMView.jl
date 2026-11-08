@@ -51,10 +51,13 @@ function format_dim_label(dim::Int, dim_names::NTuple{N,String}) where N
 end
 
 """
-Format a numeric value for display in status bar.
+Format a numeric value for display in status bar. Zero and whole numbers (below 1e15) print
+as integers; other values below 1e-3 or from 1e5 up in scientific notation.
 """
 function format_value(val::Real)
-    if abs(val) < 1e-3 || abs(val) >= 1e5
+    if isinteger(val) && abs(val) < 1e15
+        string(round(Int64, val))
+    elseif abs(val) < 1e-3 || abs(val) >= 1e5
         @sprintf("%.3e", val)
     elseif val == round(val)
         string(round(Int, val))
@@ -187,63 +190,88 @@ log_range(crange::Tuple{Real,Real}, offset::Real) =
     (log10(max(crange[1] - offset + 1, 1.0)), log10(max(crange[2] - offset + 1, 1.0)))
 
 """
-Compute colorrange by sampling (no full copy).
+    check_viewable(data, what="data")
+
+Throw an `ArgumentError` unless `data` holds real values on one-based axes.
+"""
+function check_viewable(data::AbstractArray, what::AbstractString="data")
+    eltype(data) <: Real || throw(ArgumentError(
+        "$what has element type $(eltype(data)); smlmview shows real values, so pass " *
+        "abs.(x), real.(x) or angle.(x) for complex data"))
+    Base.has_offset_axes(data) && throw(ArgumentError(
+        "$what has axes $(axes(data)); smlmview needs one-based axes " *
+        "(for an OffsetArray, pass parent(x))"))
+    return nothing
+end
+
+"""
+    viewer_mappings(clip) -> Tuple
+
+The mapping cycle of one viewer: `MAPPINGS` with the `clip` keyword as the `:linear`
+entry's clip, so that keyword holds whenever the cycle returns to `:linear`.
+"""
+function viewer_mappings(clip::Tuple{Real,Real})
+    0 <= clip[1] < clip[2] <= 1 ||
+        throw(ArgumentError("clip $clip: need 0 <= clip[1] < clip[2] <= 1"))
+    linear = merge(MAPPINGS[1], (; clip=(Float64(clip[1]), Float64(clip[2]))))
+    return (linear, Base.tail(MAPPINGS)...)
+end
+
+"""
+Mapping name for the status bar; `:linear` with a clip shows it, e.g. `linear 5-95%`.
+"""
+format_mapping(m) = m.name == :linear && m.clip != (0.0, 1.0) ?
+    @sprintf("linear %g-%g%%", 100 * m.clip[1], 100 * m.clip[2]) : string(m.name)
+
+"""
+    check_display_dims(N, dd)
+
+Throw an `ArgumentError` unless `dd` names two different dims of `1:N`.
+"""
+function check_display_dims(N::Int, dd::Tuple{Int,Int})
+    all(d -> 1 <= d <= N, dd) ||
+        throw(ArgumentError("display_dims $dd: each dim must be in 1:$N"))
+    dd[1] != dd[2] || throw(ArgumentError("display_dims $dd: the two dims must differ"))
+    return nothing
+end
+
+"""
+    compute_colorrange_sampled(data, clip; max_samples=1_000_000) -> (lo, hi)
+
+Intensity range over the finite values of `data`. With `clip == (0, 1)` it is the exact
+minimum and maximum. Otherwise it is the `clip` quantiles, taken from every value when
+`data` has at most `max_samples` of them, and from every `step`-th value
+(`step = length(data) ÷ max_samples`) when it has more. Data with no finite value gives
+`(0.0, 1.0)`; a constant `c` gives `(c, c + max(1, 1e-6|c|))`.
 """
 function compute_colorrange_sampled(data::AbstractArray{<:Number}, clip::Tuple{Real,Real};
                                      max_samples::Int=1_000_000)
     npixels = length(data)
+    full = clip[1] <= 0.0 && clip[2] >= 1.0
+    step = npixels <= max_samples ? 1 : npixels ÷ max_samples
 
-    if npixels <= max_samples
-        # Small enough to scan all
-        lo, hi = typemax(Float64), typemin(Float64)
-        for val in data
-            v = Float64(real(val))
-            if isfinite(v)
-                lo = min(lo, v)
-                hi = max(hi, v)
-            end
-        end
-
-        if (clip[1] > 0.0 || clip[2] < 1.0) && npixels > 0
-            # Need quantiles if clip is not full range
-            samples = Float64[]
-            for val in data
-                v = Float64(real(val))
-                isfinite(v) && push!(samples, v)
-            end
-            if !isempty(samples)
-                lo, hi = quantile(samples, (clip[1], clip[2]))
-            end
-        end
-    else
-        # Sample uniformly
-        step = max(1, npixels ÷ max_samples)
-        samples = Float64[]
-        sizehint!(samples, max_samples)
-
-        idx = 0
-        for val in data
-            idx += 1
-            if idx % step == 0
-                v = Float64(real(val))
-                isfinite(v) && push!(samples, v)
-            end
-        end
-
-        if isempty(samples)
-            return (0.0, 1.0)
-        end
-
-        if clip[1] <= 0.0 && clip[2] >= 1.0
-            lo, hi = extrema(samples)
-        else
-            lo, hi = quantile(samples, (clip[1], clip[2]))
-        end
+    # One pass: exact extrema of the finite values, and the samples for the quantiles
+    lo, hi = Inf, -Inf
+    samples = Float64[]
+    full || sizehint!(samples, min(npixels, max_samples + 1))
+    idx = 0
+    for val in data
+        idx += 1
+        v = Float64(real(val))
+        isfinite(v) || continue
+        v < lo && (lo = v)
+        v > hi && (hi = v)
+        !full && idx % step == 0 && push!(samples, v)
+    end
+    isfinite(lo) || return (0.0, 1.0)
+    if !full && !isempty(samples)
+        lo, hi = quantile(samples, (clip[1], clip[2]))
     end
 
-    # Ensure valid range
-    if lo >= hi
-        hi = lo + oneunit(lo)
+    # A range Makie can draw: hi above lo, also after Makie converts both to Float32
+    # (lo + 1 == lo from |lo| > 2^53 on, and in Float32 from 2^24 on)
+    if !(lo < hi)
+        hi = lo + max(1.0, 1e-6 * abs(lo))
     end
 
     return (Float64(lo), Float64(hi))

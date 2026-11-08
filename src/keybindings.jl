@@ -58,12 +58,22 @@ const KEY_NAMES = Dict{Keyboard.Button,String}(v => k for (k, v) in KEY_MAP)
 Convert key string to Keyboard.Button.
 """
 function string_to_key(s::String)
-    key = get(KEY_MAP, lowercase(s), nothing)
-    if isnothing(key)
-        @warn "Unknown key '$s', using default"
-        return Keyboard.unknown
+    return get(KEY_MAP, lowercase(s), Keyboard.unknown)
+end
+
+"""
+    resolve_keybinding(action, key_str, default_key) -> Keyboard.Button
+
+The key bound to `action`: `key_str` (a saved preference) when it names a key, otherwise
+the default, with a warning.
+"""
+function resolve_keybinding(action::String, key_str::String, default_key::String)
+    button = string_to_key(key_str)
+    if button == Keyboard.unknown
+        @warn "Unknown key '$key_str' saved for '$action', using the default '$default_key'"
+        button = string_to_key(default_key)
     end
-    return key
+    return button
 end
 
 """
@@ -81,7 +91,7 @@ function load_keybindings!()
     empty!(KEYBINDINGS)
     for (action, default_key) in DEFAULT_KEYBINDINGS
         key_str = @load_preference(action, default_key)
-        KEYBINDINGS[action] = string_to_key(key_str)
+        KEYBINDINGS[action] = resolve_keybinding(action, key_str, default_key)
     end
     return nothing
 end

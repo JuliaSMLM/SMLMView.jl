@@ -662,7 +662,8 @@ function _add_frame_inspector!(
         extent = widths(bbox)
         iszero(extent[2]) && return
         fraction = clamp((position[2] - bbox.origin[2]) / extent[2], 0, 1)
-        frame_index = round(Int, 1 + fraction * (n_frames - 1))
+        # The axis spans 0.5 .. n_frames + 0.5 and frame f is drawn at y = f
+        frame_index = clamp(round(Int, 0.5 + fraction * n_frames), 1, n_frames)
         selected_frame[] == frame_index || (selected_frame[] = frame_index)
         nothing
     end

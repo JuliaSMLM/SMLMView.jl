@@ -82,6 +82,20 @@ using SMLMView
         @test_throws ErrorException set_keybinding!("zoom_in", "invalid_key")
     end
 
+    @testset "an invalid saved key falls back to the default" begin
+        P = SMLMView.Preferences
+        saved = P.load_preference(SMLMView, "zoom_in")
+        P.set_preferences!(SMLMView, "zoom_in" => "notakey"; force=true)
+        try
+            @test_logs (:warn, r"'notakey'.*'i'") SMLMView.load_keybindings!()
+            @test get_keybindings()["zoom_in"] == "i"
+        finally
+            saved === nothing ? P.delete_preferences!(SMLMView, "zoom_in"; force=true) :
+                P.set_preferences!(SMLMView, "zoom_in" => saved; force=true)
+            SMLMView.load_keybindings!()
+        end
+    end
+
     @testset "reset_keybindings!" begin
         # Change a binding
         set_keybinding!(:zoom_in, "k")

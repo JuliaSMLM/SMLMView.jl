@@ -131,8 +131,8 @@ using SMLMView
         # Need at least 2 channels
         @test_throws ArgumentError smlmview((rand(10, 10),); show=false)
 
-        # Max 3 channels - throws BoundsError from color lookup before validation
-        @test_throws BoundsError smlmview((rand(10,10), rand(10,10), rand(10,10), rand(10,10)); show=false)
+        # Max 3 channels, checked before the default colors are looked up
+        @test_throws ArgumentError smlmview((rand(10,10), rand(10,10), rand(10,10), rand(10,10)); show=false)
 
         # Size mismatch should error
         @test_throws ArgumentError smlmview((rand(10, 10), rand(20, 20)); show=false)

@@ -8,13 +8,18 @@
 Launch an interactive viewer for multi-channel composite display.
 
 # Arguments
-- `channels`: Tuple of 2-3 arrays with matching spatial dimensions
+- `channels`: Tuple of 2-3 arrays of real values, of one size, with one-based axes. Their
+  element and array types may differ (e.g. a `UInt16` camera frame and a `Float64` image).
 
 # Keyword Arguments
-- `colors`: Channel colors, default CMY (cyan, magenta, yellow)
-- `names`: Channel names for display
+- `colors`: Channel colors, default CMY (cyan, magenta, yellow). Any tuple of at least as many
+  colors as channels, in any form Makie takes as a color (e.g. `CHANNEL_COLOR_PRESETS[:rgb]`,
+  `(RGBf(1,0,0), RGBf(0,1,0))` or `(:red, :green)`); the first `length(channels)` are used.
+- `names`: Channel names (one per channel), shown in the status bar
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims are (rows, cols)
-- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping (0.0, 1.0 = full range)
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Quantiles of the `linear` mapping's intensity stretch
+  (0.0, 1.0 = full range); it holds whenever the `m` cycle returns to `linear`
+- `title::String=""`: Axis title
 - `figsize::Tuple{Int,Int}=(800, 700)`: Max figure size
 - `show::Bool=true`: Whether to display immediately
 
@@ -34,32 +39,43 @@ ch3 = rand(256, 256, 10)  # "Alexa647"
 v = smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 ```
 """
-function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
-                  colors::Union{Nothing, NTuple{C, RGB{Float64}}}=nothing,
-                  names::Union{Nothing, NTuple{C, String}}=nothing,
+function smlmview(channels::Tuple{Vararg{AbstractArray}};
+                  colors::Union{Nothing, Tuple}=nothing,
+                  names::Union{Nothing, Tuple{Vararg{AbstractString}}}=nothing,
                   display_dims::Tuple{Int,Int}=(1, 2),
                   clip::Tuple{Real,Real}=(0.0, 1.0),
                   title::String="",
                   figsize::Tuple{Int,Int}=(800, 700),
-                  show::Bool=true) where {T<:Real, N, C}
+                  show::Bool=true)
 
-    # Default colors: take first C from DEFAULT_CHANNEL_COLORS
-    actual_colors = if colors === nothing
-        ntuple(i -> DEFAULT_CHANNEL_COLORS[i], C)
-    else
-        colors
-    end
-
-    # Validate
+    # Validate everything before any of it is used
+    C = length(channels)
     C >= 2 || throw(ArgumentError("Need at least 2 channels"))
     C <= 3 || throw(ArgumentError("Maximum 3 channels supported"))
+    N = ndims(channels[1])
     N >= 2 || throw(ArgumentError("Data must have at least 2 dimensions"))
-
-    # Check all channels have same size
     ref_size = size(channels[1])
     for (i, ch) in enumerate(channels)
+        check_viewable(ch, "Channel $i")
         size(ch) == ref_size || throw(ArgumentError("Channel $i size mismatch: $(size(ch)) vs $ref_size"))
     end
+    check_display_dims(N, display_dims)
+    mappings = viewer_mappings(clip)
+    colors === nothing || length(colors) >= C ||
+        throw(ArgumentError("colors: $(length(colors)) given for $C channels"))
+    names === nothing || length(names) == C ||
+        throw(ArgumentError("names: $(length(names)) given for $C channels"))
+
+    # Default colors: the first C of DEFAULT_CHANNEL_COLORS
+    actual_colors = colors === nothing ? ntuple(i -> DEFAULT_CHANNEL_COLORS[i], C) :
+        ntuple(C) do i
+            try
+                RGB{Float64}(Makie.to_color(colors[i]))
+            catch
+                throw(ArgumentError("colors[$i] = $(repr(colors[i])) is not a color"))
+            end
+        end
+    channel_names = names === nothing ? nothing : ntuple(i -> String(names[i]), C)
 
     # Auto-configure Bonito
     ensure_display_configured!()
@@ -68,7 +84,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     n_sliders = N - 2
 
     # Observables for each channel's colorrange (computed from data)
-    channel_ranges = [Observable(compute_colorrange_sampled(ch, clip)) for ch in channels]
+    channel_ranges = [Observable(compute_colorrange_sampled(ch, mappings[1].clip)) for ch in channels]
 
     # Channel visibility
     channel_visible = [Observable(true) for _ in 1:C]
@@ -85,7 +101,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     # Mapping state (global for all channels)
     obs_mapping_idx = Observable(1)
-    obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
+    obs_mapping = @lift mappings[$(obs_mapping_idx)]
 
     # Stretch mode (global for all channels)
     obs_stretch_idx = Observable(1)
@@ -192,8 +208,17 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     # Connect updates
     # One handler for every display-dims change (`v.display_dims[] = ...`): sliders, image,
-    # figure, view and cursor readout all follow the new dims.
+    # figure, view and cursor readout all follow the new dims. It is the first listener, so
+    # an invalid pair is put back before anything else sees it.
+    shown_dims = Ref(display_dims)
     on(obs_display_dims) do dd
+        try
+            check_display_dims(N, dd)
+        catch
+            obs_display_dims.val = shown_dims[]
+            rethrow()
+        end
+        shown_dims[] = dd
         slider_dims = sort(collect(setdiff(1:N, dd)))
         slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_composite!()
@@ -230,8 +255,8 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         end
     end
 
-    # UI height
-    ui_height = 30 + 25 * max(0, n_sliders)
+    # UI height (status bar, sliders, title)
+    ui_height = 30 + 25 * max(0, n_sliders) + (isempty(title) ? 0 : 30)
 
     # Figure size calculation
     function calculate_figure_size()
@@ -252,7 +277,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     fig = Figure(size=actual_fig_size)
 
     # Axis
-    ax = Axis(fig[2, 1]; aspect=DataAspect())
+    ax = Axis(fig[2, 1]; aspect=DataAspect(), title=title)
     hidedecorations!(ax)
     hidespines!(ax)
 
@@ -295,7 +320,8 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     function reset_view!()
         nrows, ncols = get_display_sizes()
-        obs_view_center[] = (nrows / 2.0, ncols / 2.0)
+        # The image spans 0.5 .. n + 0.5, so its center is (n + 1) / 2
+        obs_view_center[] = ((nrows + 1) / 2, (ncols + 1) / 2)
         obs_view_zoom_idx[] = DEFAULT_ZOOM_IDX
         limits!(ax, 0.5, ncols + 0.5, 0.5, nrows + 0.5)
     end
@@ -364,7 +390,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
                         end
                     end
                 elseif key == getkey("mapping_cycle")
-                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
+                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(mappings))
                 elseif key == getkey("stretch_cycle")
                     obs_stretch_idx[] = mod1(obs_stretch_idx[] + 1, length(STRETCH_MODES))
                 end
@@ -389,12 +415,15 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         stretch = $(obs_stretch)
         slider_dims = $(obs_slider_to_dim)
 
-        # Channel visibility indicators
-        vis_str = join([visible[i] ? string(i) : "-" for i in 1:C], "")
+        # Channel visibility indicators: number (or name) of each shown channel, "-" if hidden
+        vis_str = channel_names === nothing ?
+            join([visible[i] ? string(i) : "-" for i in 1:C], "") :
+            join([visible[i] ? channel_names[i] : "-" for i in 1:C], "/")
 
         # Position and values
         if in_bounds
-            val_strs = [format_value(vals[i]) for i in 1:C]
+            val_strs = [channel_names === nothing ? format_value(vals[i]) :
+                        "$(channel_names[i])=$(format_value(vals[i]))" for i in 1:C]
             pos_str = "($(pos[1]),$(pos[2])) = [$(join(val_strs, ", "))]"
         else
             pos_str = "---"
@@ -411,7 +440,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
         size_str = join(data_size, "x")
 
-        "$(pos_str) | ch:$(vis_str)$(slider_str) | $(zoom_str) | $(mapping.name) | $(stretch) | $(size_str)"
+        "$(pos_str) | ch:$(vis_str)$(slider_str) | $(zoom_str) | $(format_mapping(mapping)) | $(stretch) | $(size_str)"
     end
 
     Label(fig[1, :], status_text; fontsize=12, halign=:left, tellwidth=false)

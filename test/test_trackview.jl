@@ -67,6 +67,19 @@ const VIEW0 = build(example())
         @test occursin("TrackView", sprint(show, view))
     end
 
+    @testset "frame slider: a click selects the frame drawn there" begin
+        insp = build(example()).controls.inspector
+        n = Int(insp.slider_axis.limits[][4] - 0.5)  # the axis spans 0.5 .. n + 0.5
+        bb = insp.slider_axis.layoutobservables.computedbbox[]
+        click(y) = insp.select_frame_at(Makie.Point2f(bb.origin[1] + bb.widths[1] / 2,
+                                                      bb.origin[2] + (y - 0.5) / n * bb.widths[2]))
+        hits = [(click(f + d); insp.selected_frame[] == f) for f in 1:n, d in (-0.4, -0.2, 0.0, 0.2, 0.4)]
+        @test n == 10
+        @test all(hits)
+        click(0.5); @test insp.selected_frame[] == 1
+        click(n + 0.5); @test insp.selected_frame[] == n
+    end
+
     @testset "no truth" begin
         view = build(example(; truth=false))
         @test view.health.passed

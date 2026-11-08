@@ -8,14 +8,16 @@
 Launch an interactive viewer for N-dimensional array data (N ≥ 2).
 
 # Arguments
-- `data`: N-dimensional numeric array to display
+- `data`: N-dimensional array of real values, with one-based axes, to display
 
 # Keyword Arguments
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims to display (row_dim, col_dim)
 - `dim_names::Union{Nothing,NTuple{N,String}}=nothing`: Optional labels for each dimension
-- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping for intensity stretch (0.0, 1.0 = full range)
-- `title::String=""`: Window/axis title
-- `colormap::Symbol=:grays`: Colormap for display
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Quantiles of the `linear` mapping's intensity stretch
+  (0.0, 1.0 = full range); it holds whenever the `m` cycle returns to `linear`
+- `title::String=""`: Axis title
+- `colormap::Symbol=:grays`: Colormap for display; any Makie colormap name. One outside the
+  `c` cycle joins it, first.
 - `figsize::Tuple{Int,Int}=(800, 700)`: Maximum figure size in pixels
 - `show::Bool=true`: Whether to display the figure immediately
 
@@ -71,9 +73,15 @@ function smlmview(data::AbstractArray{T,N};
 
     # Validate
     N >= 2 || throw(ArgumentError("Data must have at least 2 dimensions"))
-    1 <= display_dims[1] <= N || throw(ArgumentError("display_dims[1] out of range"))
-    1 <= display_dims[2] <= N || throw(ArgumentError("display_dims[2] out of range"))
-    display_dims[1] != display_dims[2] || throw(ArgumentError("display_dims must be different"))
+    check_viewable(data)
+    check_display_dims(N, display_dims)
+    mappings = viewer_mappings(clip)
+    try
+        Makie.to_colormap(colormap)
+    catch
+        throw(ArgumentError("colormap :$colormap is not a Makie colormap name"))
+    end
+    colormaps = colormap in COLORMAPS ? COLORMAPS : (colormap, COLORMAPS...)
 
     # Auto-configure Bonito if not already done
     ensure_display_configured!()
@@ -82,8 +90,8 @@ function smlmview(data::AbstractArray{T,N};
     data_size = size(data)
     n_sliders = N - 2
 
-    # Compute global intensity range by sampling (no full copy)
-    crange = compute_colorrange_sampled(data, clip)
+    # Global intensity range (no full copy)
+    crange = compute_colorrange_sampled(data, mappings[1].clip)
 
     # Create observables
     obs_display_dims = Observable(display_dims)
@@ -102,14 +110,13 @@ function smlmview(data::AbstractArray{T,N};
     pending_dim_key = Observable{Union{Nothing,Int}}(nothing)
     pending_dim_time = Ref(0.0)
 
-    # Colormap state - find initial index or default to first
-    initial_cmap_idx = findfirst(==(colormap), COLORMAPS)
-    obs_colormap_idx = Observable(initial_cmap_idx === nothing ? 1 : initial_cmap_idx)
-    obs_colormap = @lift COLORMAPS[$(obs_colormap_idx)]
+    # Colormap state: index into this viewer's cycle
+    obs_colormap_idx = Observable(findfirst(==(colormap), colormaps))
+    obs_colormap = @lift colormaps[$(obs_colormap_idx)]
 
     # Mapping state (intensity transform + clip)
     obs_mapping_idx = Observable(1)  # Default to linear
-    obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
+    obs_mapping = @lift mappings[$(obs_mapping_idx)]
 
     # Stretch mode state (global vs per-slice scaling)
     obs_stretch_idx = Observable(1)  # Default to global
@@ -181,8 +188,17 @@ function smlmview(data::AbstractArray{T,N};
     end
 
     # One handler for every display-dims change (keys or `v.display_dims[] = ...`):
-    # sliders, slice, colorrange, figure and view all follow the new dims.
+    # sliders, slice, colorrange, figure and view all follow the new dims. It is the first
+    # listener, so an invalid pair is put back before anything else sees it.
+    shown_dims = Ref(display_dims)
     on(obs_display_dims) do dd
+        try
+            check_display_dims(N, dd)
+        catch
+            obs_display_dims.val = shown_dims[]
+            rethrow()
+        end
+        shown_dims[] = dd
         slider_dims = sort(collect(setdiff(1:N, dd)))
         slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_slice!()
@@ -230,8 +246,8 @@ function smlmview(data::AbstractArray{T,N};
         return (nrows, ncols)
     end
 
-    # UI height for status bar + sliders
-    ui_height = 30 + 25 * max(0, n_sliders)
+    # UI height for status bar + sliders (+ title)
+    ui_height = 30 + 25 * max(0, n_sliders) + (isempty(title) ? 0 : 30)
 
     # Calculate figure size based on image aspect ratio
     function calculate_figure_size()
@@ -254,7 +270,7 @@ function smlmview(data::AbstractArray{T,N};
     fig = Figure(size=actual_fig_size)
 
     # Image axis - clean display, no decorations
-    ax = Axis(fig[2, 1]; aspect=DataAspect())
+    ax = Axis(fig[2, 1]; aspect=DataAspect(), title=title)
     hidedecorations!(ax)
     hidespines!(ax)
 
@@ -307,7 +323,8 @@ function smlmview(data::AbstractArray{T,N};
 
     function reset_view!()
         nrows, ncols = get_display_sizes()
-        obs_view_center[] = (nrows / 2.0, ncols / 2.0)
+        # The image spans 0.5 .. n + 0.5, so its center is (n + 1) / 2
+        obs_view_center[] = ((nrows + 1) / 2, (ncols + 1) / 2)
         obs_view_zoom_idx[] = DEFAULT_ZOOM_IDX
         limits!(ax, 0.5, ncols + 0.5, 0.5, nrows + 0.5)
     end
@@ -408,10 +425,10 @@ function smlmview(data::AbstractArray{T,N};
                     end
                 elseif key == getkey("colormap_cycle")
                     # Cycle colormap
-                    obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(COLORMAPS))
+                    obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(colormaps))
                 elseif key == getkey("mapping_cycle")
                     # Cycle mapping (intensity transform + clip)
-                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
+                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(mappings))
                 elseif key == getkey("stretch_cycle")
                     # Cycle stretch mode (global vs per-slice)
                     obs_stretch_idx[] = mod1(obs_stretch_idx[] + 1, length(STRETCH_MODES))
@@ -458,7 +475,7 @@ function smlmview(data::AbstractArray{T,N};
         # Size string
         size_str = join(data_size, "×")
 
-        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(mapping.name) | $(stretch) | $(size_str) $(T)"
+        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(format_mapping(mapping)) | $(stretch) | $(size_str) $(T)"
     end
 
     Label(fig[1, :], status_text;

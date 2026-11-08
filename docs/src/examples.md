@@ -35,7 +35,7 @@ dapi = rand(512, 512, 20)   # Nuclear stain
 gfp = rand(512, 512, 20)    # Green fluorescent protein
 alexa = rand(512, 512, 20)  # Far-red label
 
-# View as composite (default CMY colors)
+# View as composite (default CMY colors); the names label the status bar's values
 v = smlmview((dapi, gfp, alexa); names=("DAPI", "GFP", "Alexa647"))
 
 # Toggle channels with 1/2/3 keys or programmatically
@@ -57,10 +57,14 @@ ch3 = rand(256, 256)
 colors = CHANNEL_COLOR_PRESETS[:rgb]
 smlmview((ch1, ch2, ch3); colors=colors)
 
-# Or define custom colors
+# Or define custom colors, in any form Makie takes as a color
 using WGLMakie: RGB
 custom = (RGB(1.0, 0.0, 0.0), RGB(0.0, 1.0, 0.0), RGB(0.0, 0.0, 1.0))
 smlmview((ch1, ch2, ch3); colors=custom)
+smlmview((ch1, ch2, ch3); colors=(:red, :lime, :blue))
+
+# With fewer channels than colors, the first ones are used (here red and green)
+smlmview((ch1, ch2); colors=CHANNEL_COLOR_PRESETS[:rgb])
 ```
 
 ## 4D+ Data Navigation
@@ -94,7 +98,8 @@ data = exp.(randn(256, 256) .* 2)
 v = smlmview(data)
 
 # Press 'm' to cycle through:
-# - linear: Full min-max range
+# - linear: Full min-max range, or the quantiles given by the clip keyword
+#   (smlmview(data; clip=(0.01, 0.99)))
 # - log: log10(x - min + 1), min over what the stretch spans (dataset or slice)
 # - p1_99: 1%-99% percentile clip
 # - p5_95: 5%-95% percentile clip
@@ -121,7 +126,7 @@ set_keybinding!(:pan_right, "d")
 get_keybindings()
 
 # Reset to defaults
-reset_keybindings()
+reset_keybindings!()
 
 # See available keys and actions
 list_keys()

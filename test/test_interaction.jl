@@ -1,9 +1,18 @@
-# Keyboard and mouse interaction of the array viewers, driven through the figure's events
-# (bug-fix round 2026-11-07). Every testset here failed on 7dc2de3.
+# Keyboard and mouse interaction of the array viewers, driven through the figure's events,
+# and their keywords and input checks (bug-fix round 2026-11-07). Every testset here failed
+# on 7dc2de3.
 using Test
 using SMLMView
 using SMLMView.WGLMakie: Makie
-using SMLMView.WGLMakie.Makie: events, KeyEvent, Keyboard, Label, red, green, blue
+using SMLMView.WGLMakie.Makie: events, KeyEvent, Keyboard, Label, red, green, blue, RGBf
+
+# An array whose axes start at 2, as an OffsetArray's can (the viewers need one-based axes).
+struct ShiftedAxes{T,N} <: AbstractArray{T,N}
+    a::Array{T,N}
+end
+Base.size(s::ShiftedAxes) = size(s.a)
+Base.axes(s::ShiftedAxes) = map(n -> Base.IdentityUnitRange(2:n+1), size(s.a))
+Base.getindex(s::ShiftedAxes{T,N}, i::Vararg{Int,N}) where {T,N} = s.a[(i .- 1)...]
 
 function press!(fig, k::Keyboard.Button)
     events(fig).keyboardbutton[] = KeyEvent(k, Keyboard.press)
@@ -246,5 +255,147 @@ plane(v) = SMLMView.extract_slice_raw(v.data, v.display_dims[], v.slice_indices)
         press!(v.fig, Keyboard._1)
         @test !v.channel_visible[1][]
         @test occursin("ch:-2", status(v.fig))
+    end
+end
+
+@testset "Keywords and input checks" begin
+    @testset "full range is the exact minimum and maximum" begin
+        # 1500x1500 values: more than max_samples, so the quantile path samples every 2nd
+        # value; the extremes sit at odd linear indices, between those samples.
+        data = zeros(Float32, 1500, 1500)
+        data[1] = 1000
+        data[3] = -5
+        data[5] = NaN
+        @test SMLMView.compute_colorrange_sampled(data, (0.0, 1.0)) == (-5.0, 1000.0)
+        @test smlmview(data; show=false).colorrange[] == (-5.0, 1000.0)
+        c = smlmview((data, 2 .* data); show=false)
+        @test [r[] for r in c.channel_ranges] == [(-5.0, 1000.0), (-10.0, 2000.0)]
+    end
+
+    @testset "ranges of data with no finite value, or one value" begin
+        @test SMLMView.compute_colorrange_sampled(fill(NaN, 10, 10), (0.0, 1.0)) == (0.0, 1.0)
+        @test SMLMView.compute_colorrange_sampled(fill(NaN, 10, 10), (0.05, 0.95)) == (0.0, 1.0)
+        @test smlmview(fill(NaN, 10, 10); show=false).colorrange[] == (0.0, 1.0)
+        @test SMLMView.compute_colorrange_sampled(fill(3.0, 4, 4), (0.0, 1.0)) == (3.0, 4.0)
+        lo, hi = SMLMView.compute_colorrange_sampled(fill(1e17, 4, 4), (0.0, 1.0))
+        @test Float32(lo) < Float32(hi)  # still a range after Makie's Float32 conversion
+    end
+
+    @testset "status values: zero and whole numbers print as integers" begin
+        @test SMLMView.format_value(0) == "0"
+        @test SMLMView.format_value(0.0) == "0"
+        @test SMLMView.format_value(UInt16(0)) == "0"
+        @test SMLMView.format_value(123456) == "123456"
+        @test SMLMView.format_value(2.5) == "2.500"
+        @test SMLMView.format_value(1.5e-5) == "1.500e-05"
+        @test SMLMView.format_value(NaN) == "NaN"
+        z = Float64[i + j for i in 1:6, j in 1:7]
+        z[2, 3] = 0
+        v = smlmview(z; show=false)
+        hover!(v, 2, 3, 6)
+        @test startswith(status(v.fig), "(2, 3) = 0 |")
+    end
+
+    @testset "clip keyword holds through the g and m cycles" begin
+        data = reshape(Float64.(0:9999), 100, 100)
+        want = SMLMView.compute_colorrange_sampled(data, (0.05, 0.95))
+        v = smlmview(data; clip=(0.05, 0.95), show=false)
+        @test v.colorrange[] == want
+        @test occursin("linear 5-95%", status(v.fig))
+        action!(v.fig, "stretch_cycle")
+        action!(v.fig, "stretch_cycle")
+        @test v.colorrange[] == want
+        for _ in 1:4
+            action!(v.fig, "mapping_cycle")
+        end
+        @test v.mapping[].name == :linear
+        @test v.colorrange[] == want
+        c = smlmview((data, 2 .* data); clip=(0.05, 0.95), show=false)
+        start = [r[] for r in c.channel_ranges]
+        @test start[1] == want
+        for _ in 1:4
+            action!(c.fig, "mapping_cycle")
+        end
+        @test [r[] for r in c.channel_ranges] == start
+        @test occursin("linear 5-95%", status(c.fig))
+        @test_throws ArgumentError smlmview(data; clip=(0.9, 0.1), show=false)
+        @test_throws ArgumentError smlmview((data, data); clip=(0.0, 1.5), show=false)
+    end
+
+    @testset "reset view centers the image" begin
+        for v in (smlmview(rand(10, 20); show=false), smlmview((rand(10, 20), rand(10, 20)); show=false))
+            action!(v.fig, "reset")
+            @test v.view_center[] == (5.5, 10.5)
+            action!(v.fig, "zoom_in")
+            lim = v.ax.targetlimits[]
+            @test lim.origin .+ lim.widths ./ 2 ≈ [10.5, 5.5]
+        end
+    end
+
+    @testset "colormap keyword: any Makie colormap" begin
+        v = smlmview(rand(4, 4); colormap=:magma, show=false)
+        @test v.colormap[] == :magma
+        action!(v.fig, "colormap_cycle")
+        @test v.colormap[] == :grays
+        for _ in 1:length(SMLMView.COLORMAPS)
+            action!(v.fig, "colormap_cycle")
+        end
+        @test v.colormap[] == :magma
+        @test smlmview(rand(4, 4); colormap=:viridis, show=false).colormap[] == :viridis
+        @test_throws ArgumentError smlmview(rand(4, 4); colormap=:notacolormap, show=false)
+    end
+
+    @testset "title keyword" begin
+        @test smlmview(rand(4, 4); title="Cell 1", show=false).ax.title[] == "Cell 1"
+        @test smlmview((rand(4, 4), rand(4, 4)); title="Cell 1", show=false).ax.title[] == "Cell 1"
+    end
+
+    @testset "invalid display_dims through the handle is refused and put back" begin
+        v = smlmview(rand(5, 6, 7); show=false)
+        @test_throws ArgumentError (v.display_dims[] = (1, 1))
+        @test v.display_dims[] == (1, 2)
+        @test_throws ArgumentError (v.display_dims[] = (1, 4))
+        @test v.display_dims[] == (1, 2)
+        action!(v.fig, "slice_next")
+        @test v.slice_indices[3][] == 2
+        @test drawn(v) ≈ permutedims(reverse(plane(v); dims=1))
+        v.display_dims[] = (1, 3)
+        @test occursin("(1,3) | 2:1/6", status(v.fig))
+        c = smlmview((rand(5, 6, 7), rand(5, 6, 7)); show=false)
+        @test_throws ArgumentError (c.display_dims[] = (3, 3))
+        @test c.display_dims[] == (1, 2)
+        @test_throws ArgumentError (c.display_dims[] = (0, 2))
+        @test c.display_dims[] == (1, 2)
+    end
+
+    @testset "input checks run before use" begin
+        @test_throws ArgumentError smlmview((rand(8, 8), rand(8, 8)); display_dims=(1, 3), show=false)
+        @test_throws ArgumentError smlmview((rand(8, 8), rand(8, 8)); display_dims=(1, 1), show=false)
+        @test_throws r"element type" smlmview(rand(ComplexF64, 8, 8); show=false)
+        @test_throws r"element type" smlmview((rand(8, 8), rand(ComplexF64, 8, 8)); show=false)
+        @test_throws r"one-based" smlmview(ShiftedAxes(rand(4, 4)); show=false)
+        @test_throws r"one-based" smlmview((rand(4, 4), ShiftedAxes(rand(4, 4))); show=false)
+        @test_throws ArgumentError smlmview((rand(4, 4), rand(4, 4, 2)); show=false)
+        @test_throws ArgumentError smlmview((rand(4, 4), rand(4, 4)); names=("a",), show=false)
+        @test_throws ArgumentError smlmview((rand(4, 4), rand(4, 4)); colors=(RGBf(1, 0, 0),), show=false)
+        @test_throws ArgumentError smlmview((rand(4, 4), rand(4, 4)); colors=(1, "x"), show=false)
+    end
+
+    @testset "composite takes mixed channel types, color forms and names" begin
+        a = Float32[i + j for i in 1:6, j in 1:7]
+        b = UInt16[10i + j for i in 1:6, j in 1:7]
+        v = smlmview((a, b); names=("ref", "frame"), show=false)
+        hover!(v, 2, 3, 6)
+        @test v.pixel_values[] == (5.0, 23.0)
+        s = status(v.fig)
+        @test occursin("[ref=5, frame=23]", s)
+        @test occursin("ch:ref/frame", s)
+        press!(v.fig, Keyboard._1)
+        @test occursin("ch:-/frame", status(v.fig))
+        @test smlmview((view(a, :, :), Array(a)); show=false).colors == SMLMView.DEFAULT_CHANNEL_COLORS[1:2]
+        rgb = CHANNEL_COLOR_PRESETS[:rgb]
+        @test smlmview((a, a); colors=rgb, show=false).colors == rgb[1:2]
+        @test smlmview((a, a); colors=(RGBf(1, 0, 0), RGBf(0, 1, 0)), show=false).colors == rgb[1:2]
+        @test smlmview((a, a); colors=(:red, :lime), show=false).colors == rgb[1:2]
     end
 end
