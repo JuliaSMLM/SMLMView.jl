@@ -86,16 +86,19 @@ using SMLMView
         @test SMLMView.Preferences.load_preference(SMLMView, "zoom_in") in (nothing, "i")
     end
 
-    # Run f with these saved preferences, then put the active project's LocalPreferences.toml
-    # back exactly as it was (f may save others through set_keybinding!).
+    # Run f with only these keybinding preferences saved in the active project, then clear
+    # them all again (f may save others through set_keybinding!). Clearing goes through the
+    # Preferences API (`missing` removes an action's entry and any block of it), as the code
+    # under test does; a test helper that rewrote the file left entries behind under Pkg.test.
     function with_saved(f, prefs::Pair...)
-        path = joinpath(dirname(Base.active_project()), "LocalPreferences.toml")
-        before = isfile(path) ? read(path, String) : nothing
-        isempty(prefs) || SMLMView.Preferences.set_preferences!(SMLMView, prefs...; force=true)
+        P = SMLMView.Preferences
+        clear() = P.set_preferences!(SMLMView, (a => missing for a in list_actions())...; force=true)
+        clear()
+        isempty(prefs) || P.set_preferences!(SMLMView, prefs...; force=true)
         try
             f()
         finally
-            before === nothing ? rm(path; force=true) : write(path, before)
+            clear()
             SMLMView.load_keybindings!()
         end
     end
@@ -151,15 +154,14 @@ using SMLMView
         write(joinpath(parent, "LocalPreferences.toml"), "[SMLMView]\nzoom_in = \"k\"\n")
         push!(LOAD_PATH, parent)
         try
-            # `missing` lifts any local setting or block of zoom_in left by earlier tests
-            with_saved("zoom_in" => missing) do
+            with_saved() do  # no local entry or block, so the parent's zoom_in shows
                 SMLMView.load_keybindings!()
                 @test get_keybindings()["zoom_in"] == "k"  # inherited
                 set_keybinding!(:zoom_in, "i")              # back to the default
                 SMLMView.load_keybindings!()                # as at the next start
                 @test get_keybindings()["zoom_in"] == "i"
             end
-            with_saved("zoom_in" => missing) do
+            with_saved() do
                 SMLMView.load_keybindings!()
                 @test get_keybindings()["zoom_in"] == "k"
                 reset_keybindings!()
