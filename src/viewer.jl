@@ -58,8 +58,9 @@ v = smlmview(data4d; display_dims=(1, 3), dim_names=("Y", "X", "Z", "T"))
 ```
 
 # Notes
-- Intensities are computed in Float64, and Makie draws them normalized to the colorrange, so
-  its Float32 drawing loses nothing more. Values that are equal in Float64 draw alike:
+- Intensities are computed in Float64, and Makie draws them normalized to the colorrange:
+  that avoids a range collapsing for its magnitude or width, and drawing keeps Float32
+  precision within the range. Values that are equal in Float64 draw alike:
   integers beyond 2^53 closer than their Float64 spacing (`typemax(UInt64) - 1` and
   `typemax(UInt64)` are one Float64), and the log mapping keeps no contrast at Float64's
   subnormal scale (differences below about 1e-308).
