@@ -13,8 +13,9 @@ Pkg.instantiate()
 # Run all tests
 Pkg.test()
 
-# Run specific test file
-include("test/test_keybindings.jl")
+# Run specific test file (test_keybindings.jl rewrites the active project's
+# LocalPreferences.toml, so run it under Pkg.test, not from a dev environment)
+include("test/test_interaction.jl")
 
 # Interactive testing - Bonito auto-configures on first call
 using SMLMView
@@ -37,6 +38,7 @@ SMLMView is a WGLMakie-based interactive array viewer inspired by DIPimage's `di
 - **tools.jl**: Helper functions - slice extraction, colorrange sampling, cursor updates, formatting
 - **viewer.jl**: Main `smlmview(data::AbstractArray)` - single-channel ND viewer with Observables-based reactivity
 - **viewer_composite.jl**: `smlmview(channels::Tuple)` - multi-channel RGB composite with additive blending
+- **trackview/**: `trackview(scene)` - 3D track viewer (x, y, frame) with a linked 2D frame inspector; module `TrackViewer`, documented in `docs/src/trackview.md`
 
 ### Key Design Patterns
 - **Observables-based reactivity**: All state (slice indices, zoom, colormap, cursor) stored in Observables; UI updates automatically via `on()` callbacks and `@lift` macros

@@ -19,7 +19,7 @@ WGLMakie-based interactive array viewer for N-dimensional microscopy data, inspi
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaSMLM/SMLMView.jl")
+Pkg.add("SMLMView")
 ```
 
 ## Quick Start
@@ -42,6 +42,7 @@ smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 |-----|--------|
 | `j` / `l` | Previous / next slice |
 | `i` / `o` | Zoom in / out |
+| `e` / `s` / `d` / `f` | Pan up / left / down / right |
 | `c` | Cycle colormap |
 | `m` | Cycle intensity mapping |
 | `g` | Toggle global/slice stretch |

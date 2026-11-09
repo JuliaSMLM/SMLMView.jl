@@ -8,13 +8,19 @@
 Launch an interactive viewer for multi-channel composite display.
 
 # Arguments
-- `channels`: Tuple of 2-3 arrays with matching spatial dimensions
+- `channels`: Tuple of 2-3 arrays of real values, of one size, with one-based axes. Their
+  element and array types may differ (e.g. a `UInt16` camera frame and a `Float64` image).
 
 # Keyword Arguments
-- `colors`: Channel colors, default CMY (cyan, magenta, yellow)
-- `names`: Channel names for display
+- `colors`: Channel colors, default CMY (cyan, magenta, yellow). Any tuple of at least as many
+  opaque colors as channels, in any form Makie takes as a color (e.g.
+  `CHANNEL_COLOR_PRESETS[:rgb]`, `(RGBf(1,0,0), RGBf(0,1,0))` or `(:red, :green)`); the first
+  `length(channels)` are used. A transparent color throws an `ArgumentError`.
+- `names`: Channel names (one per channel), shown in the status bar
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims are (rows, cols)
-- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping (0.0, 1.0 = full range)
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Quantiles of the `linear` mapping's intensity stretch
+  (0.0, 1.0 = full range); it holds whenever the `m` cycle returns to `linear`
+- `title::String=""`: Axis title
 - `figsize::Tuple{Int,Int}=(800, 700)`: Max figure size
 - `show::Bool=true`: Whether to display immediately
 
@@ -33,33 +39,53 @@ ch2 = rand(256, 256, 10)  # "GFP"
 ch3 = rand(256, 256, 10)  # "Alexa647"
 v = smlmview((ch1, ch2, ch3); names=("DAPI", "GFP", "A647"))
 ```
+
+# Notes
+- Intensities are computed in Float64 and blended as colors in Float64. Values that are equal
+  in Float64 draw alike: integers beyond 2^53 closer than their Float64 spacing, and under the
+  log mapping, differences at Float64's subnormal scale (below about 1e-308).
 """
-function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
-                  colors::Union{Nothing, NTuple{C, RGB{Float64}}}=nothing,
-                  names::Union{Nothing, NTuple{C, String}}=nothing,
+function smlmview(channels::Tuple{Vararg{AbstractArray}};
+                  colors::Union{Nothing, Tuple}=nothing,
+                  names::Union{Nothing, Tuple{Vararg{AbstractString}}}=nothing,
                   display_dims::Tuple{Int,Int}=(1, 2),
                   clip::Tuple{Real,Real}=(0.0, 1.0),
                   title::String="",
                   figsize::Tuple{Int,Int}=(800, 700),
-                  show::Bool=true) where {T<:Real, N, C}
+                  show::Bool=true)
 
-    # Default colors: take first C from DEFAULT_CHANNEL_COLORS
-    actual_colors = if colors === nothing
-        ntuple(i -> DEFAULT_CHANNEL_COLORS[i], C)
-    else
-        colors
-    end
-
-    # Validate
+    # Validate everything before any of it is used
+    C = length(channels)
     C >= 2 || throw(ArgumentError("Need at least 2 channels"))
     C <= 3 || throw(ArgumentError("Maximum 3 channels supported"))
+    N = ndims(channels[1])
     N >= 2 || throw(ArgumentError("Data must have at least 2 dimensions"))
-
-    # Check all channels have same size
     ref_size = size(channels[1])
     for (i, ch) in enumerate(channels)
+        check_viewable(ch, "Channel $i")
         size(ch) == ref_size || throw(ArgumentError("Channel $i size mismatch: $(size(ch)) vs $ref_size"))
     end
+    check_display_dims(N, display_dims)
+    mappings = viewer_mappings(clip)
+    colors === nothing || length(colors) >= C ||
+        throw(ArgumentError("colors: $(length(colors)) given for $C channels"))
+    names === nothing || length(names) == C ||
+        throw(ArgumentError("names: $(length(names)) given for $C channels"))
+
+    # Default colors: the first C of DEFAULT_CHANNEL_COLORS
+    actual_colors = colors === nothing ? ntuple(i -> DEFAULT_CHANNEL_COLORS[i], C) :
+        ntuple(C) do i
+            c = try
+                Makie.to_color(colors[i])
+            catch
+                throw(ArgumentError("colors[$i] = $(repr(colors[i])) is not a color"))
+            end
+            # Channels blend by adding their colors; a transparency would have no meaning
+            Makie.Colors.alpha(c) == 1 || throw(ArgumentError(
+                "colors[$i] = $(repr(colors[i])) is transparent; the composite blends opaque colors"))
+            RGB{Float64}(c)
+        end
+    channel_names = names === nothing ? nothing : ntuple(i -> String(names[i]), C)
 
     # Auto-configure Bonito
     ensure_display_configured!()
@@ -68,7 +94,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     n_sliders = N - 2
 
     # Observables for each channel's colorrange (computed from data)
-    channel_ranges = [Observable(compute_colorrange_sampled(ch, clip)) for ch in channels]
+    channel_ranges = [Observable(compute_colorrange_sampled(ch, mappings[1].clip)) for ch in channels]
 
     # Channel visibility
     channel_visible = [Observable(true) for _ in 1:C]
@@ -85,7 +111,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     # Mapping state (global for all channels)
     obs_mapping_idx = Observable(1)
-    obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
+    obs_mapping = @lift mappings[$(obs_mapping_idx)]
 
     # Stretch mode (global for all channels)
     obs_stretch_idx = Observable(1)
@@ -109,22 +135,17 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         return (nrows, ncols)
     end
 
-    # Apply transform to a slice
-    function apply_transform(slice::AbstractMatrix, transform::Symbol)
-        if transform == :log
-            min_val = minimum(slice)
-            shifted = slice .- min_val .+ 1.0
-            return log10.(shifted)
-        else
-            return slice
-        end
+    # Each channel's minimum, for the log offset under :global stretch (computed on first use)
+    channel_mins = Vector{Union{Nothing,Float64}}(nothing, C)
+    function channel_min(i)
+        m = channel_mins[i]
+        m === nothing && (m = channel_mins[i] = finite_minimum(channels[i]))
+        return m
     end
 
-    # Normalize a slice to 0-1 given colorrange
-    function normalize_slice(slice::AbstractMatrix, crange::Tuple{Float64, Float64})
-        lo, hi = crange
-        return clamp.((slice .- lo) ./ (hi - lo), 0.0, 1.0)
-    end
+    # Normalize a slice to 0-1 given colorrange (any finite range, however wide or narrow)
+    normalize_slice(slice::AbstractMatrix, crange::Tuple{Float64, Float64}) =
+        clamp.(normalize_to_range(slice, crange), 0.0, 1.0)
 
     # Composite channels into RGB matrix
     function composite_rgb()
@@ -144,22 +165,20 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
             # Get slice for this channel
             raw_slice = prepare_slice_nd(channels[i], dd, slice_indices)
-            transformed = apply_transform(raw_slice, mapping.transform)
+            # Log: log10(x - offset + 1), offset the minimum of what the stretch spans (the
+            # channel for :global, the shown plane for :slice), as the range uses
+            islog = mapping.transform == :log
+            offset = !islog ? 0.0 :
+                stretch == :global ? channel_min(i) : finite_minimum(raw_slice)
+            transformed = islog ? log_values(raw_slice, offset) : raw_slice
 
             # Compute colorrange based on stretch mode
             if stretch == :slice
                 crange = compute_colorrange_sampled(transformed, mapping.clip)
             else
-                # Use precomputed global range, transform if needed
+                # Use precomputed global range, on the drawn values' scale
                 base_range = channel_ranges[i][]
-                if mapping.transform == :log
-                    min_ch = minimum(channels[i])
-                    lo_shifted = base_range[1] - min_ch + 1.0
-                    hi_shifted = base_range[2] - min_ch + 1.0
-                    crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
-                else
-                    crange = base_range
-                end
+                crange = islog ? log_range(base_range, offset) : base_range
             end
 
             # Normalize and blend with channel color
@@ -196,8 +215,28 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     end
 
     # Connect updates
-    on(obs_display_dims) do _
+    # One handler for every display-dims change (`v.display_dims[] = ...`): sliders, image,
+    # figure, view and cursor readout all follow the new dims. It runs first (the highest
+    # priority, registered first), so an invalid pair is put back before any other listener
+    # sees it.
+    shown_dims = Ref(display_dims)
+    on(obs_display_dims; priority=typemax(Int)) do dd
+        try
+            check_display_dims(N, dd)
+        catch
+            obs_display_dims.val = shown_dims[]
+            rethrow()
+        end
+        shown_dims[] = dd
+        slider_dims = sort(collect(setdiff(1:N, dd)))
+        slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_composite!()
+        resize!(fig, calculate_figure_size()...)
+        # Recreate the image so WGLMakie allocates a texture of the new size
+        empty!(ax)
+        create_image!()
+        reset_view!()
+        obs_in_bounds[] && update_cursor_composite!()
     end
 
     for idx_obs in slice_indices
@@ -208,6 +247,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     on(obs_mapping_idx) do _
         mapping = obs_mapping[]
+        fill!(channel_mins, nothing)  # rescan with the ranges
         for i in 1:C
             channel_ranges[i][] = compute_colorrange_sampled(channels[i], mapping.clip)
         end
@@ -224,8 +264,8 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         end
     end
 
-    # UI height
-    ui_height = 30 + 25 * max(0, n_sliders)
+    # UI height (status bar, sliders, title)
+    ui_height = 30 + 25 * max(0, n_sliders) + (isempty(title) ? 0 : 30)
 
     # Figure size calculation
     function calculate_figure_size()
@@ -246,7 +286,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
     fig = Figure(size=actual_fig_size)
 
     # Axis
-    ax = Axis(fig[2, 1]; aspect=DataAspect())
+    ax = Axis(fig[2, 1]; aspect=DataAspect(), title=title)
     hidedecorations!(ax)
     hidespines!(ax)
 
@@ -289,7 +329,8 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
     function reset_view!()
         nrows, ncols = get_display_sizes()
-        obs_view_center[] = (nrows / 2.0, ncols / 2.0)
+        # The image spans 0.5 .. n + 0.5, so its center is (n + 1) / 2
+        obs_view_center[] = ((nrows + 1) / 2, (ncols + 1) / 2)
         obs_view_zoom_idx[] = DEFAULT_ZOOM_IDX
         limits!(ax, 0.5, ncols + 0.5, 0.5, nrows + 0.5)
     end
@@ -358,7 +399,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
                         end
                     end
                 elseif key == getkey("mapping_cycle")
-                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
+                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(mappings))
                 elseif key == getkey("stretch_cycle")
                     obs_stretch_idx[] = mod1(obs_stretch_idx[] + 1, length(STRETCH_MODES))
                 end
@@ -369,8 +410,12 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         return Consume(false)
     end
 
-    # Status bar
+    # Status bar (an input on every slice index and channel toggle, so neither lags)
+    obs_slice_tuple = lift((idx...) -> idx, slice_indices...)
+    obs_visible_tuple = lift((vis...) -> vis, channel_visible...)
     status_text = @lift begin
+        idxs = $(obs_slice_tuple)
+        visible = $(obs_visible_tuple)
         pos = $(obs_cursor_pos)
         vals = $(obs_pixel_values)
         in_bounds = $(obs_in_bounds)
@@ -379,12 +424,15 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         stretch = $(obs_stretch)
         slider_dims = $(obs_slider_to_dim)
 
-        # Channel visibility indicators
-        vis_str = join([channel_visible[i][] ? string(i) : "-" for i in 1:C], "")
+        # Channel visibility indicators: number (or name) of each shown channel, "-" if hidden
+        vis_str = channel_names === nothing ?
+            join([visible[i] ? string(i) : "-" for i in 1:C], "") :
+            join([visible[i] ? channel_names[i] : "-" for i in 1:C], "/")
 
         # Position and values
         if in_bounds
-            val_strs = [format_value(vals[i]) for i in 1:C]
+            val_strs = [channel_names === nothing ? format_value(vals[i]) :
+                        "$(channel_names[i])=$(format_value(vals[i]))" for i in 1:C]
             pos_str = "($(pos[1]),$(pos[2])) = [$(join(val_strs, ", "))]"
         else
             pos_str = "---"
@@ -395,19 +443,22 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         # Slider states
         slider_strs = String[]
         for dim in slider_dims
-            push!(slider_strs, "$(dim):$(slice_indices[dim][])/$( data_size[dim])")
+            push!(slider_strs, "$(dim):$(idxs[dim])/$( data_size[dim])")
         end
         slider_str = isempty(slider_strs) ? "" : " | " * join(slider_strs, " ")
 
         size_str = join(data_size, "x")
 
-        "$(pos_str) | ch:$(vis_str)$(slider_str) | $(zoom_str) | $(mapping.name) | $(stretch) | $(size_str)"
+        "$(pos_str) | ch:$(vis_str)$(slider_str) | $(zoom_str) | $(format_mapping(mapping)) | $(stretch) | $(size_str)"
     end
 
     Label(fig[1, :], status_text; fontsize=12, halign=:left, tellwidth=false)
 
     # Sliders for non-display dims
     sliders = []
+    # True while the sliders are being reassigned to new dims: a slider's value moves
+    # then (Makie clamps it into the new range), and that move is not a user choice.
+    remapping = Ref(false)
     slider_labels_obs = Observable{String}[]
     slider_ranges_obs = Observable{UnitRange{Int}}[]
 
@@ -425,6 +476,7 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
 
         let i = i
             on(sl.value) do v
+                remapping[] && return
                 dim = obs_slider_to_dim[][i]
                 if slice_indices[dim][] != v
                     slice_indices[dim][] = v
@@ -447,11 +499,29 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
         end
     end
 
-    # Mouse hover - update pixel values for all channels
-    on(events(ax.scene).mouseposition) do _
+    # Reassign the sliders when display_dims changes
+    on(obs_slider_to_dim) do new_dims
+        remapping[] = true
         try
-            mpos = mouseposition(ax.scene)
-            if !isnothing(mpos)
+            for (i, dim) in enumerate(new_dims)
+                if i <= length(sliders)
+                    slider_labels_obs[i][] = "dim $dim:"
+                    slider_ranges_obs[i][] = 1:data_size[dim]
+                    set_close_to!(sliders[i], slice_indices[dim][])
+                end
+            end
+        finally
+            remapping[] = false
+        end
+    end
+
+    # Cursor readout: pixel values of all channels under the mouse, at the current slice
+    function update_cursor_composite!()
+        try
+            mpos = mouse_data_position(ax)
+            if isnothing(mpos)
+                obs_in_bounds[] = false
+            else
                 dd = obs_display_dims[]
                 nrows = data_size[dd[1]]
                 ncols = data_size[dd[2]]
@@ -484,6 +554,23 @@ function smlmview(channels::NTuple{C, <:AbstractArray{T,N}};
             end
         catch
             obs_in_bounds[] = false
+        end
+        return nothing
+    end
+
+    # Mouse hover
+    on(_ -> update_cursor_composite!(), events(ax.scene).mouseposition)
+
+    # Zoom, pan, reset, a resized figure or a reversed axis move the image under a still
+    # mouse: read the pixel now under it (a resize can change the viewport and leave the
+    # limits as they are)
+    onany((_...) -> update_cursor_composite!(), ax.finallimits, ax.scene.viewport,
+          ax.xreversed, ax.yreversed, ax.xscale, ax.yscale)
+
+    # Slice change (keyboard or slider) with the mouse held still
+    for idx_obs in slice_indices
+        on(idx_obs) do _
+            obs_in_bounds[] && update_cursor_composite!()
         end
     end
 

@@ -13,7 +13,7 @@ WGLMakie-based interactive array viewer for N-dimensional microscopy data, inspi
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaSMLM/SMLMView.jl")
+Pkg.add("SMLMView")
 ```
 
 ## Quick Start
@@ -59,6 +59,7 @@ view = trackview(scene; output=:html, html="scene.html")
 |-----|--------|
 | `j` / `l` | Previous / next slice |
 | `i` / `o` | Zoom in / out |
+| `e` / `s` / `d` / `f` | Pan up / left / down / right |
 | `c` | Cycle colormap |
 | `m` | Cycle intensity mapping |
 | `g` | Toggle global/slice stretch |
@@ -68,8 +69,7 @@ view = trackview(scene; output=:html, html="scene.html")
 
 ## Documentation
 
-- [API Reference](api_overview.md) - Function signatures and examples
-- [Full Documentation](https://JuliaSMLM.github.io/SMLMView.jl/dev/) - Guides and tutorials
+- [Full Documentation](https://JuliaSMLM.github.io/SMLMView.jl/dev/) - Guides, examples and the API reference
 
 ## License
 

@@ -8,14 +8,16 @@
 Launch an interactive viewer for N-dimensional array data (N ≥ 2).
 
 # Arguments
-- `data`: N-dimensional numeric array to display
+- `data`: N-dimensional array of real values, with one-based axes, to display
 
 # Keyword Arguments
 - `display_dims::Tuple{Int,Int}=(1,2)`: Which dims to display (row_dim, col_dim)
 - `dim_names::Union{Nothing,NTuple{N,String}}=nothing`: Optional labels for each dimension
-- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Percentile clipping for intensity stretch (0.0, 1.0 = full range)
-- `title::String=""`: Window/axis title
-- `colormap::Symbol=:grays`: Colormap for display
+- `clip::Tuple{Real,Real}=(0.0, 1.0)`: Quantiles of the `linear` mapping's intensity stretch
+  (0.0, 1.0 = full range); it holds whenever the `m` cycle returns to `linear`
+- `title::String=""`: Axis title
+- `colormap::Symbol=:grays`: Colormap for display; any Makie colormap name. One outside the
+  `c` cycle joins it, first.
 - `figsize::Tuple{Int,Int}=(800, 700)`: Maximum figure size in pixels
 - `show::Bool=true`: Whether to display the figure immediately
 
@@ -56,6 +58,12 @@ v = smlmview(data4d; display_dims=(1, 3), dim_names=("Y", "X", "Z", "T"))
 ```
 
 # Notes
+- Intensities are computed in Float64, and Makie draws them normalized to the colorrange:
+  that avoids a range collapsing for its magnitude or width, and drawing keeps Float32
+  precision within the range. Values that are equal in Float64 draw alike:
+  integers beyond 2^53 closer than their Float64 spacing (`typemax(UInt64) - 1` and
+  `typemax(UInt64)` are one Float64), and the log mapping keeps no contrast at Float64's
+  subnormal scale (differences below about 1e-308).
 - Data is displayed with standard image orientation: row 1 at top, col 1 at left
 - Status bar shows current display dims: (1,2) means dim1→rows, dim2→cols
 - For N-dim data, N-2 sliders are created for non-display dimensions
@@ -71,9 +79,15 @@ function smlmview(data::AbstractArray{T,N};
 
     # Validate
     N >= 2 || throw(ArgumentError("Data must have at least 2 dimensions"))
-    1 <= display_dims[1] <= N || throw(ArgumentError("display_dims[1] out of range"))
-    1 <= display_dims[2] <= N || throw(ArgumentError("display_dims[2] out of range"))
-    display_dims[1] != display_dims[2] || throw(ArgumentError("display_dims must be different"))
+    check_viewable(data)
+    check_display_dims(N, display_dims)
+    mappings = viewer_mappings(clip)
+    try
+        Makie.to_colormap(colormap)
+    catch
+        throw(ArgumentError("colormap :$colormap is not a Makie colormap name"))
+    end
+    colormaps = colormap in COLORMAPS ? COLORMAPS : (colormap, COLORMAPS...)
 
     # Auto-configure Bonito if not already done
     ensure_display_configured!()
@@ -82,8 +96,8 @@ function smlmview(data::AbstractArray{T,N};
     data_size = size(data)
     n_sliders = N - 2
 
-    # Compute global intensity range by sampling (no full copy)
-    crange = compute_colorrange_sampled(data, clip)
+    # Global intensity range (no full copy)
+    crange = compute_colorrange_sampled(data, mappings[1].clip)
 
     # Create observables
     obs_display_dims = Observable(display_dims)
@@ -102,14 +116,13 @@ function smlmview(data::AbstractArray{T,N};
     pending_dim_key = Observable{Union{Nothing,Int}}(nothing)
     pending_dim_time = Ref(0.0)
 
-    # Colormap state - find initial index or default to first
-    initial_cmap_idx = findfirst(==(colormap), COLORMAPS)
-    obs_colormap_idx = Observable(initial_cmap_idx === nothing ? 1 : initial_cmap_idx)
-    obs_colormap = @lift COLORMAPS[$(obs_colormap_idx)]
+    # Colormap state: index into this viewer's cycle
+    obs_colormap_idx = Observable(findfirst(==(colormap), colormaps))
+    obs_colormap = @lift colormaps[$(obs_colormap_idx)]
 
     # Mapping state (intensity transform + clip)
     obs_mapping_idx = Observable(1)  # Default to linear
-    obs_mapping = @lift MAPPINGS[$(obs_mapping_idx)]
+    obs_mapping = @lift mappings[$(obs_mapping_idx)]
 
     # Stretch mode state (global vs per-slice scaling)
     obs_stretch_idx = Observable(1)  # Default to global
@@ -119,8 +132,11 @@ function smlmview(data::AbstractArray{T,N};
     obs_view_zoom_idx = Observable(DEFAULT_ZOOM_IDX)
     obs_view_center = Observable((0.0, 0.0))  # Will be set by reset_view!
 
-    # Current slice data - reactive to display_dims and slice_indices
-    obs_slice_data = Observable(prepare_slice_nd(data, display_dims, slice_indices))
+    # Current slice data - reactive to display_dims and slice_indices.
+    # Float64 whatever the data's type: the log mapping's values fit integer data too, and
+    # no value is narrowed before it is normalized for drawing (a Float32 buffer rounded
+    # log values of tiny Float32 data to zero).
+    obs_slice_data = Observable{Matrix{Float64}}(prepare_slice_nd(data, display_dims, slice_indices))
 
     # Coordinate observables - must update when display_dims changes
     # These ensure heatmap coordinate grid matches data shape
@@ -129,22 +145,28 @@ function smlmview(data::AbstractArray{T,N};
     obs_xs = Observable(1:initial_ncols)
     obs_ys = Observable(1:initial_nrows)
 
-    # Apply intensity transform to slice data
-    function apply_transform(slice::AbstractMatrix, transform::Symbol)
-        if transform == :log
-            # Log transform: shift to positive, take log10
-            min_val = minimum(slice)
-            shifted = slice .- min_val .+ 1.0  # Ensure all positive
-            return log10.(shifted)
-        else
-            return slice
+    # Log mapping draws log10(x - offset + 1). The offset is the minimum of what the stretch
+    # spans (the whole array for :global, the shown plane for :slice), the same minimum
+    # update_colorrange! uses, so drawn values and colorrange are on one scale. The global
+    # minimum is cached between colorrange updates (a full scan per slice step is too slow).
+    global_min = Ref{Union{Nothing,Float64}}(nothing)
+    function log_offset(plane::AbstractArray)
+        if obs_stretch[] == :global
+            global_min[] === nothing && (global_min[] = finite_minimum(data))
+            return global_min[]
         end
+        return finite_minimum(plane)
     end
+
+    # Apply intensity transform to slice data
+    apply_transform(slice::AbstractMatrix, transform::Symbol) =
+        transform == :log ? log_values(slice, log_offset(slice)) : slice
 
     # Update colorrange based on current mapping and stretch mode
     function update_colorrange!()
         mapping = obs_mapping[]
         stretch = obs_stretch[]
+        global_min[] = nothing  # rescan with the range, as the range itself is rescanned
 
         # Get source data for colorrange: global dataset or current slice
         # Use extract_slice_raw (not prepare_slice_nd) to get raw values without display transforms
@@ -155,14 +177,8 @@ function smlmview(data::AbstractArray{T,N};
         end
 
         crange = compute_colorrange_sampled(source_data, mapping.clip)
-        if mapping.transform == :log
-            # Transform the range for log display
-            lo, hi = crange
-            min_data = minimum(source_data)
-            lo_shifted = lo - min_data + 1.0
-            hi_shifted = hi - min_data + 1.0
-            crange = (log10(max(lo_shifted, 1.0)), log10(max(hi_shifted, 1.0)))
-        end
+        # Transform the range for log display, on the drawn values' scale
+        mapping.transform == :log && (crange = log_range(crange, log_offset(source_data)))
         obs_colorrange[] = crange
     end
 
@@ -179,14 +195,34 @@ function smlmview(data::AbstractArray{T,N};
         obs_slice_data[] = apply_transform(raw_slice, mapping.transform)
     end
 
-    on(obs_display_dims) do _
+    # One handler for every display-dims change (keys or `v.display_dims[] = ...`):
+    # sliders, slice, colorrange, figure and view all follow the new dims. It runs first (the
+    # highest priority, registered first), so an invalid pair is put back before any other
+    # listener sees it.
+    shown_dims = Ref(display_dims)
+    on(obs_display_dims; priority=typemax(Int)) do dd
+        try
+            check_display_dims(N, dd)
+        catch
+            obs_display_dims.val = shown_dims[]
+            rethrow()
+        end
+        shown_dims[] = dd
+        slider_dims = sort(collect(setdiff(1:N, dd)))
+        slider_dims != obs_slider_to_dim[] && (obs_slider_to_dim[] = slider_dims)
         update_slice!()
+        # The per-slice range belongs to the plane now shown
+        obs_stretch[] == :slice && update_colorrange!()
         # Resize figure to match new aspect ratio
         new_size = calculate_figure_size()
         resize!(fig, new_size...)
         # Recreate heatmap to force WGLMakie texture reallocation with new dimensions
         empty!(ax)
         create_heatmap!()
+        reset_view!()
+        # The image moved under a still mouse: read the pixel now under it
+        obs_in_bounds[] && update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
+                                             obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
 
     for idx_obs in slice_indices
@@ -205,9 +241,10 @@ function smlmview(data::AbstractArray{T,N};
         update_slice!()
     end
 
-    # When stretch mode changes, update colorrange
+    # When stretch mode changes, update colorrange (and the log offset of the drawn slice)
     on(obs_stretch_idx) do _
         update_colorrange!()
+        obs_mapping[].transform == :log && update_slice!()
     end
 
     # Get current display dimensions' sizes
@@ -218,8 +255,8 @@ function smlmview(data::AbstractArray{T,N};
         return (nrows, ncols)
     end
 
-    # UI height for status bar + sliders
-    ui_height = 30 + 25 * max(0, n_sliders)
+    # UI height for status bar + sliders (+ title)
+    ui_height = 30 + 25 * max(0, n_sliders) + (isempty(title) ? 0 : 30)
 
     # Calculate figure size based on image aspect ratio
     function calculate_figure_size()
@@ -242,17 +279,24 @@ function smlmview(data::AbstractArray{T,N};
     fig = Figure(size=actual_fig_size)
 
     # Image axis - clean display, no decorations
-    ax = Axis(fig[2, 1]; aspect=DataAspect())
+    ax = Axis(fig[2, 1]; aspect=DataAspect(), title=title)
     hidedecorations!(ax)
     hidespines!(ax)
+
+    # Makie draws in Float32. The heatmap gets each value normalized to the colorrange
+    # (normalize_to_range), and the range as (0, 1), so any range stays drawable: a narrow one
+    # next to its magnitude (1e9 and 1e9 + 1 are one Float32), a tiny one (1e-50) or a huge
+    # one (1e40). `colorrange` in the returned handle stays in data units.
+    obs_drawn = lift(normalize_to_range, obs_slice_data, obs_colorrange)
+    obs_drawn_range = Observable((0.0, 1.0))
 
     # Display current slice as heatmap with explicit coordinates
     # Store reference for recreation when display_dims changes (WGLMakie texture resize issue)
     hm_ref = Ref{Any}(nothing)
 
     function create_heatmap!()
-        hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_slice_data;
-                           colorrange=obs_colorrange,
+        hm_ref[] = heatmap!(ax, obs_xs, obs_ys, obs_drawn;
+                           colorrange=obs_drawn_range,
                            colormap=obs_colormap,
                            interpolate=false)
     end
@@ -295,7 +339,8 @@ function smlmview(data::AbstractArray{T,N};
 
     function reset_view!()
         nrows, ncols = get_display_sizes()
-        obs_view_center[] = (nrows / 2.0, ncols / 2.0)
+        # The image spans 0.5 .. n + 0.5, so its center is (n + 1) / 2
+        obs_view_center[] = ((nrows + 1) / 2, (ncols + 1) / 2)
         obs_view_zoom_idx[] = DEFAULT_ZOOM_IDX
         limits!(ax, 0.5, ncols + 0.5, 0.5, nrows + 0.5)
     end
@@ -322,8 +367,6 @@ function smlmview(data::AbstractArray{T,N};
            1 <= new_dims[2] <= N &&
            new_dims != obs_display_dims[]
             obs_display_dims[] = new_dims
-            obs_slider_to_dim[] = sort(collect(setdiff(1:N, new_dims)))
-            reset_view!()
         end
     end
 
@@ -398,10 +441,10 @@ function smlmview(data::AbstractArray{T,N};
                     end
                 elseif key == getkey("colormap_cycle")
                     # Cycle colormap
-                    obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(COLORMAPS))
+                    obs_colormap_idx[] = mod1(obs_colormap_idx[] + 1, length(colormaps))
                 elseif key == getkey("mapping_cycle")
                     # Cycle mapping (intensity transform + clip)
-                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(MAPPINGS))
+                    obs_mapping_idx[] = mod1(obs_mapping_idx[] + 1, length(mappings))
                 elseif key == getkey("stretch_cycle")
                     # Cycle stretch mode (global vs per-slice)
                     obs_stretch_idx[] = mod1(obs_stretch_idx[] + 1, length(STRETCH_MODES))
@@ -413,8 +456,10 @@ function smlmview(data::AbstractArray{T,N};
         return Consume(false)
     end
 
-    # Status bar
+    # Status bar (an input on every slice index, so the slider readout never lags)
+    obs_slice_tuple = lift((idx...) -> idx, slice_indices...)
     status_text = @lift begin
+        idxs = $(obs_slice_tuple)
         pos = $(obs_cursor_pos)
         val = $(obs_pixel_value)
         in_bounds = $(obs_in_bounds)
@@ -439,14 +484,14 @@ function smlmview(data::AbstractArray{T,N};
         # Slider states
         slider_strs = String[]
         for dim in slider_dims
-            push!(slider_strs, "$(dim):$(slice_indices[dim][])/$( data_size[dim])")
+            push!(slider_strs, "$(dim):$(idxs[dim])/$( data_size[dim])")
         end
         slider_str = isempty(slider_strs) ? "" : " | " * join(slider_strs, " ")
 
         # Size string
         size_str = join(data_size, "×")
 
-        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(mapping.name) | $(stretch) | $(size_str) $(T)"
+        "$(pos_str) | $(dims_str)$(slider_str) | $(zoom_str) | $(cmap) | $(format_mapping(mapping)) | $(stretch) | $(size_str) $(T)"
     end
 
     Label(fig[1, :], status_text;
@@ -456,6 +501,9 @@ function smlmview(data::AbstractArray{T,N};
 
     # Create sliders for non-display dims
     sliders = []
+    # True while the sliders are being reassigned to new dims: a slider's value moves
+    # then (Makie clamps it into the new range), and that move is not a user choice.
+    remapping = Ref(false)
     slider_labels_obs = Observable{String}[]
     slider_ranges_obs = Observable{UnitRange{Int}}[]
 
@@ -475,6 +523,7 @@ function smlmview(data::AbstractArray{T,N};
         # Slider → slice_index
         let i = i
             on(sl.value) do v
+                remapping[] && return
                 dim = obs_slider_to_dim[][i]
                 if slice_indices[dim][] != v
                     slice_indices[dim][] = v
@@ -499,17 +548,30 @@ function smlmview(data::AbstractArray{T,N};
 
     # Update slider assignments when display_dims changes
     on(obs_slider_to_dim) do new_dims
-        for (i, dim) in enumerate(new_dims)
-            if i <= length(sliders)
-                slider_labels_obs[i][] = format_dim_label(dim, dim_names)
-                slider_ranges_obs[i][] = 1:data_size[dim]
-                set_close_to!(sliders[i], slice_indices[dim][])
+        remapping[] = true
+        try
+            for (i, dim) in enumerate(new_dims)
+                if i <= length(sliders)
+                    slider_labels_obs[i][] = format_dim_label(dim, dim_names)
+                    slider_ranges_obs[i][] = 1:data_size[dim]
+                    set_close_to!(sliders[i], slice_indices[dim][])
+                end
             end
+        finally
+            remapping[] = false
         end
     end
 
     # Mouse hover tracking
     on(events(ax.scene).mouseposition) do _
+        update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
+                          obs_cursor_pos, obs_pixel_value, obs_in_bounds)
+    end
+
+    # Zoom, pan, reset, a resized figure or a reversed axis move the image under a still
+    # mouse: read the pixel now under it (a resize can change the viewport and leave the
+    # limits as they are)
+    onany(ax.finallimits, ax.scene.viewport, ax.xreversed, ax.yreversed, ax.xscale, ax.yscale) do _...
         update_cursor_nd!(ax, data, obs_display_dims, slice_indices,
                           obs_cursor_pos, obs_pixel_value, obs_in_bounds)
     end
